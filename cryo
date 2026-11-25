@@ -695,14 +695,15 @@ def cmd_teleport(a):
             return
         print(f"cryo: that didn't work from here; run it on {a.to} yourself:", flush=True)
     else:
-        print("cryo: now run this on the other Sprite (the link works once, for 30 minutes):")
+        print("cryo: now run this on the other Sprite (the link lasts 30 minutes, until the agent lands):")
     print(f"\n  sudo cryo import {pull}\n")
     print(f"cryo: changed your mind? `sudo cryo thaw {a.name}` here brings it back.")
 
 
 def download(url, path):
     import urllib.request
-    with urllib.request.urlopen(url, timeout=60) as r, open(path, "wb") as f:
+    req = urllib.request.Request(url, headers={"X-Cryo-Import": "1", "User-Agent": "cryo"})
+    with urllib.request.urlopen(req, timeout=60) as r, open(path, "wb") as f:
         total = int(r.headers.get("Content-Length") or 0)
         got, shown = 0, -1
         while True:
@@ -1054,10 +1055,14 @@ def cmd_serve(a):
             self.send(404, {"error": "not found"})
 
         def bundle(self, ticket):
+            # only `cryo import` may take it: a browser, a link preview or a stray click
+            # gets a 404 and doesn't use the link up. It keeps working until the agent lands.
+            if self.headers.get("X-Cryo-Import") != "1":
+                return self.send(404, {"error": "not found"})
             tickets = load_tickets()
             t = tickets.get(ticket)
-            if not t or t.get("fetched") or now() > t["expires"] or not os.path.exists(t["bundle"]):
-                return self.send(404, {"error": "no such ticket (they work once, for 30 minutes)"})
+            if not t or now() > t["expires"] or not os.path.exists(t["bundle"]):
+                return self.send(404, {"error": "no such ticket (links last 30 minutes, until the agent lands)"})
             t["fetched"] = now()
             save_tickets(tickets)
             size = os.path.getsize(t["bundle"])
