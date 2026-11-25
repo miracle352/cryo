@@ -773,7 +773,7 @@ def cmd_install(a):
         sys.exit(f"cryo: could not create the service:\n{r.stdout}{r.stderr}\n"
                  f"try: sprite-env services create {SERVICE} --cmd {WRAPPER}")
     event("install", SERVICE, interval=a.interval)
-    print(f"cryo: installed as Sprite service '{SERVICE}' (snapshot every {a.interval}s, thaw on boot)")
+    print(f"cryo: installed as Sprite service '{SERVICE}' (snapshot after activity, thaw on boot)")
     if a.api:
         extra = " --public-restart" if a.public_restart else ""
         sprite_name = a.sprite or os.uname().nodename
@@ -789,7 +789,9 @@ def cmd_install(a):
                             "--http-port", "8080", "--no-stream"], capture_output=True, text=True)
         if r.returncode != 0:
             sys.exit(f"cryo: could not create the api service:\n{r.stdout}{r.stderr}")
-        print(f"cryo: api service '{API_SERVICE}' on the Sprite URL, admin token: {api_token()}")
+        api_token()
+        print(f"cryo: api service '{API_SERVICE}' on the Sprite URL "
+              f"(admin token: sudo cat {TOKEN_FILE})")
 
 
 def cmd_uninstall(a):
