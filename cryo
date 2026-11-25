@@ -526,7 +526,7 @@ def find_resend_gateway():
         if isinstance(x, dict):
             blob = json.dumps(x).lower()
             if "resend" in blob:
-                for k in ("base_url", "url", "gateway_url"):
+                for k in ("gateway_base_url", "base_url", "url", "gateway_url"):
                     v = x.get(k)
                     if isinstance(v, str) and "/gateway/resend/" in v:
                         found.append(v.rstrip("/"))
