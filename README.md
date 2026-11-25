@@ -65,6 +65,8 @@ sudo cryo alerts --email you@example.com --test
 | `cryo say NAME TEXT` / `cryo peek NAME` | talk to / look at a tmux agent |
 | `cryo report --subject S --file F` | email a report through the Resend connector |
 | `cryo alerts --email E` | where restart alerts go |
+| `cryo teleport NAME [--to SPRITE]` | move a running agent to another Sprite |
+| `cryo import LINK` | receive it on the other Sprite |
 | `cryo ls`, `cryo events` | status and history |
 
 ## The overnight agent
@@ -72,6 +74,28 @@ sudo cryo alerts --email you@example.com --test
 `demo/overnight.sh` starts Claude Code under cryo with a long task (by default:
 audit cryo itself) and tells it to email its finished report through the
 Resend connector. Restart the Sprite as often as you like while it works.
+
+## Teleport
+
+Move a running agent to another Sprite without stopping its work.
+
+```sh
+# on the Sprite it lives on (its URL must be public, cryo-api running)
+sudo cryo teleport cc --url https://cryo-lab-xxxx.sprites.app
+
+# on the other Sprite (same setup: criu, tmux, cryo cloned)
+sudo cryo import https://cryo-lab-xxxx.sprites.app/api/bundle/<one-time link>
+```
+
+The source does a last freeze, packs the images with every non-system file the
+agent had open or mapped, and hands out a link that works once for 30 minutes.
+The other Sprite pulls it, checks that the PIDs are free and that every program
+file it didn't carry is the same there, thaws it, and tells the source it landed.
+Nothing is deleted on the source until then: `cryo thaw cc` there calls it back.
+
+Both Sprites need the same versions of the programs the agent runs (claude,
+node, python). If they differ, `import` says which file and changes nothing;
+teleport again with `--carry-max 512` to bring the bigger files along.
 
 ## How it works
 

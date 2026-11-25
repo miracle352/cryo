@@ -100,7 +100,7 @@ h1 em{font-style:italic;color:var(--accent,var(--warm));transition:color .6s}
 .ag .x{text-align:right;font:400 28px var(--serif);font-style:italic;color:var(--ice);line-height:1}
 .ag .x small{display:block;font:500 9px var(--mono);font-style:normal;color:var(--di);letter-spacing:.08em;text-transform:uppercase;margin-top:4px}
 .pill{font:500 9px var(--mono);letter-spacing:.08em;padding:3px 7px;border-radius:999px;text-transform:uppercase}
-.pill.run{background:rgba(92,240,168,.1);color:var(--green)}.pill.dead{background:rgba(255,77,77,.12);color:var(--red)}
+.pill.mv{background:rgba(143,216,255,.1);color:var(--ice)}.pill.run{background:rgba(92,240,168,.1);color:var(--green)}.pill.dead{background:rgba(255,77,77,.12);color:var(--red)}
 .ag.flash::after{content:"";position:absolute;inset:0;background:linear-gradient(100deg,transparent 20%,rgba(143,216,255,.18) 50%,transparent 80%);animation:sw 1.2s}
 @keyframes sw{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
 .evs{height:150px;overflow:hidden;padding:8px 18px;-webkit-mask-image:linear-gradient(#000 60%,transparent);mask-image:linear-gradient(#000 60%,transparent)}
@@ -373,7 +373,7 @@ let lastEnv=null,seen=new Set(),first=true,lastF={},restarting=false,rStart=0,en
 const ago=t=>t?dur(Math.max(0,Date.now()/1000-t))+" ago":"never";
 const get=p=>fetch(API+p,{cache:"no-store"}).then(r=>{if(!r.ok)throw r.status;return r.json()});
 function renderAgents(st){const box=$("#agents");if(!st.agents.length){box.innerHTML='<div class="empty">no agents right now</div>';return}
-  box.innerHTML=st.agents.map(a=>`<div class="ag" data-n="${esc(a.name)}"><div><div class="n">${esc(a.name)} <span class="pill ${a.alive?"run":"dead"}">${a.alive?"alive":"down"}</span></div>
+  box.innerHTML=st.agents.map(a=>`<div class="ag" data-n="${esc(a.name)}"><div><div class="n">${esc(a.name)} ${a.status==="moved"?`<span class="pill mv">moved → ${esc(a.moved_to)}</span>`:a.status==="away"?`<span class="pill mv">teleporting</span>`:`<span class="pill ${a.alive?"run":"dead"}">${a.alive?"alive":"down"}</span>`}${a.came_from?` <span class="pill mv">from ${esc(a.came_from)}</span>`:""}</div>
     <div class="m">${esc(a.program)} · ${a.image_bytes?(a.image_bytes/1e6).toFixed(0)+" MB":"—"} · frozen ${ago(a.last_freeze)}</div></div>
     <div class="x">${a.thaws}<small>deaths survived</small></div></div>`).join("");
   st.agents.forEach(a=>{if(lastF[a.name]&&lastF[a.name]!==a.last_freeze){const el=box.querySelector(`[data-n="${CSS.escape(a.name)}"]`);el&&el.classList.add("flash")}lastF[a.name]=a.last_freeze})}
@@ -381,7 +381,9 @@ function evTxt(e){const s=e.seconds!=null?` in ${e.seconds}s`:"";switch(e.kind){
   case"freeze":return`<b>${esc(e.agent)}</b> frozen${s}`;case"thaw":return`<b>${esc(e.agent)}</b> came back${s}`;
   case"reboot_detected":return`<b>${esc(e.agent)}</b> died in a restart`;case"restart_requested":return`someone pressed <b>kill</b>`;
   case"alert":return`✉ ${esc(e.subject||"")}`;case"run":return`<b>${esc(e.agent)}</b> was born`;case"say":return`<b>${esc(e.agent)}</b> got a message`;
-  case"install":return`cryo service installed`;default:return`${esc(e.kind)} ${esc(e.agent||"")}`}}
+  case"install":return`cryo service installed`;case"teleport":return`<b>${esc(e.agent)}</b> packed for teleport`;
+  case"bundle_sent":return`<b>${esc(e.agent)}</b> left this Sprite`;case"landed":return`<b>${esc(e.agent)}</b> landed on ${esc(e.to)}`;
+  case"arrived":return`<b>${esc(e.agent)}</b> arrived from ${esc(e.from_sprite)} in ${e.seconds}s`;default:return`${esc(e.kind)} ${esc(e.agent||"")}`}}
 function renderEvents(evs){const rows=[];for(let i=evs.length-1;i>=0&&rows.length<14;i--){const e=evs[i],id=e.t+e.kind+e.agent,nw=!first&&!seen.has(id);seen.add(id);
   if(nw&&restarting)logLive(evTxt(e),e.kind==="thaw"?"g":e.kind==="reboot_detected"?"r":"k");
   rows.push(`<div class="ev ${esc(e.kind)}${nw?" new":""}"><span class="tm">${new Date(e.t*1000).toLocaleTimeString([],{hour12:false,hour:"2-digit",minute:"2-digit",second:"2-digit"})}</span><span>${evTxt(e)}</span></div>`)}
@@ -401,8 +403,9 @@ function prog(st){
   if(!st){if(!sawDown){sawDown=true;phase="down";liveTarget=.45;logLive("cryo-lab stopped answering. every process is gone.","r");setCaption(2,`It's happening now. cryo-lab is <em>dead.</em>`)}return}
   const changed=envBefore&&st.environment!==envBefore;
   if((changed||sawDown)&&phase!=="back"&&phase!=="done"){phase="back";liveTarget=.62;logLive("cryo-lab is back, with empty memory. cryo is thawing…","k");setCaption(3,`The machine is back, <em>empty.</em> cryo starts thawing.`)}
-  if(phase==="back"&&st.agents.length&&st.agents.every(a=>a.alive)){phase="done";liveTarget=.9;
-    logLive(`all ${st.agents.length} agents came back. nothing was lost.`,"g");setCaption(4,`They all came back in <em>${el()}</em>. Nothing was lost.`);
+  const here=st.agents.filter(a=>!["moved","away","stopped"].includes(a.status));
+  if(phase==="back"&&here.length&&here.every(a=>a.alive)){phase="done";liveTarget=.9;
+    logLive(`all ${here.length} agents came back. nothing was lost.`,"g");setCaption(4,`They all came back in <em>${el()}</em>. Nothing was lost.`);
     $("#realtxt").textContent=`That was real. You killed cryo-lab and every agent came back in ${el()}.`;setTimeout(endLive,9000)}}
 function endLive(){restarting=false;mode="replay";$("#liveTag").classList.remove("on");term.classList.remove("livemode");$("#tname").textContent="claude · tmux · cryo-lab";
   caps.forEach((c,i)=>c.innerHTML=ORIG[i]);$("#killBtn").disabled=false;t0=performance.now();

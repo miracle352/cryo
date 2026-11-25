@@ -87,6 +87,11 @@ def seccomp_blocker(blocked=tuple(BLOCKED_SYSCALLS.values()), errno_=38):
     return apply
 
 
+# statuses cryo must not thaw on its own: stopped by hand, or on its way to /
+# already living on another Sprite
+PARKED = ("stopped", "leaving", "away", "moved", "arriving")
+
+
 def agent_dir(name):
     return os.path.join(STATE, "agents", name)
 
@@ -349,7 +354,7 @@ def irmap_paths(meta):
     return sorted(hits)
 
 
-def freeze(meta, leave_running):
+def freeze(meta, leave_running, status=None):
     name = meta["name"]
     d = agent_dir(name)
     if not alive(meta["pid"]):
@@ -388,13 +393,13 @@ def freeze(meta, leave_running):
     shutil.rmtree(old, ignore_errors=True)
     meta.update(last_freeze=now(), freeze_seconds=round(dt, 3), cpu_at_freeze=tree_cpu(meta["pid"]),
                 image_bytes=dir_size(cur), boot_id=boot_id(),
-                status="running" if leave_running else "frozen")
+                status=status or ("running" if leave_running else "frozen"))
     save(meta)
     event("freeze", name, seconds=round(dt, 3), bytes=meta["image_bytes"], leave_running=leave_running)
     return True, f"{name}: frozen in {dt:.2f}s ({meta['image_bytes'] / 1e6:.1f} MB)"
 
 
-def thaw(meta):
+def thaw(meta, extra=()):
     name = meta["name"]
     d = agent_dir(name)
     img = os.path.join(d, "images")
@@ -412,6 +417,7 @@ def thaw(meta):
             "--file-locks", "--network-lock", "skip", "--pidfile", pidfile]
     if meta.get("tmux"):
         args.append("--ext-unix-sk")
+    args += list(extra)
     ok, dt, errs = criu(args, img)
     if not ok:
         event("thaw_failed", name, errors=errs)
@@ -443,7 +449,21 @@ def cmd_thaw(a):
     targets = all_agents() if a.all else [load(a.name)]
     rc = 0
     for m in targets:
+        if m["status"] == "moved" and not a.force:
+            print(f"cryo: {m['name']} lives on {m.get('moved_to', 'another Sprite')} now "
+                  f"(thaw --force would make a second copy)")
+            rc = 1
+            continue
+        recalled = m["status"] in ("away", "leaving")
         ok, msg = thaw(m)
+        if ok and recalled:
+            # called back: the teleport link must stop working
+            tickets = load_tickets()
+            for k in [k for k, t in tickets.items() if t["name"] == m["name"]]:
+                if tickets[k].get("fetched"):
+                    print(f"cryo: careful: {m['name']} was already pulled by another Sprite")
+                del tickets[k]
+            save_tickets(tickets)
         print("cryo:", msg)
         rc |= not ok
     sys.exit(rc)
@@ -453,7 +473,7 @@ def cmd_boot(a):
     """Thaw every agent whose process died because the machine restarted."""
     bid = boot_id()
     for m in all_agents():
-        if alive(m["pid"]) or m["status"] == "stopped":
+        if alive(m["pid"]) or m["status"] in PARKED:
             continue
         restarted = m.get("boot_id") != bid
         if restarted:
@@ -489,7 +509,7 @@ def cmd_watch(a):
     while not stop:
         t = time.monotonic()
         for m in all_agents():
-            if m["status"] == "stopped":
+            if m["status"] in PARKED:
                 continue
             name = m["name"]
             if not alive(m["pid"]):
@@ -537,6 +557,252 @@ def cmd_stop(a):
     event("stop", a.name)
     print(f"cryo: {a.name} stopped (frozen copy kept)")
 
+
+
+# ---------------------------------------------------------------- teleport
+#
+# Move a running agent to another Sprite. The source does a final dump (the
+# process stops), packs the images with every non-system file the process had
+# open or mapped, and hands out a one-time ticket. The destination pulls the
+# bundle from the source's cryo api, checks it can restore it, and thaws it.
+# Until the destination reports back, `cryo thaw NAME` on the source undoes it.
+
+SYSTEM_DIRS = ("/usr/", "/lib/", "/lib32/", "/lib64/", "/bin/", "/sbin/", "/etc/",
+               "/proc/", "/sys/", "/dev/", "/run/", "/snap/", "/opt/")
+TICKETS = os.path.join(STATE, "tickets.json")
+
+
+def files_in_use(pid):
+    """Regular files the process tree has open or mapped, and every task's cwd."""
+    paths, dirs, pids = set(), set(), process_tree(pid)
+    for p in pids:
+        try:
+            dirs.add(os.readlink(f"/proc/{p}/cwd"))
+        except OSError:
+            pass
+        try:
+            for fd in os.listdir(f"/proc/{p}/fd"):
+                try:
+                    t = os.readlink(f"/proc/{p}/fd/{fd}")
+                except OSError:
+                    continue
+                if t.startswith("/"):
+                    paths.add(t)
+        except OSError:
+            pass
+        try:
+            with open(f"/proc/{p}/maps") as f:
+                for line in f:
+                    parts = line.split(None, 5)
+                    if len(parts) == 6 and parts[5].startswith("/"):
+                        paths.add(parts[5].rstrip("\n"))
+        except OSError:
+            pass
+    files = []
+    for path in sorted(paths):
+        if path.endswith(" (deleted)") or not os.path.isfile(path):
+            continue
+        files.append({"path": path, "size": os.path.getsize(path)})
+    return files, sorted(d for d in dirs if not d.endswith(" (deleted)")), pids
+
+
+def load_tickets():
+    try:
+        with open(TICKETS) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def save_tickets(t):
+    os.makedirs(STATE, exist_ok=True)
+    tmp = TICKETS + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(t, f, indent=2)
+    os.chmod(tmp, 0o600)
+    os.replace(tmp, TICKETS)
+
+
+def sprite_name():
+    return load_config().get("sprite") or os.environ.get("SPRITE_NAME") or os.uname().nodename
+
+
+def cmd_teleport(a):
+    import secrets
+    import tarfile
+    m = load(a.name)
+    if not alive(m["pid"]):
+        sys.exit(f"cryo: {a.name} isn't running")
+    url = (a.url or load_config().get("url") or "").rstrip("/")
+    if not url:
+        sys.exit("cryo: the other Sprite pulls the agent from this Sprite's URL.\n"
+                 "pass --url https://<this-sprite>.sprites.app (or set it once: cryo install --api --url ...)\n"
+                 "the URL must be public (sprite url update --auth public) and cryo-api must be running")
+    carry_max = a.carry_max << 20
+    files, dirs, pids = files_in_use(m["pid"])
+    for f in files:
+        f["carried"] = not f["path"].startswith(SYSTEM_DIRS) and f["size"] <= carry_max
+
+    t0 = now()
+    ok, msg = freeze(m, leave_running=False, status="leaving")
+    if not ok:
+        sys.exit("cryo: " + msg + "\n(the agent is still running here)")
+    print("cryo:", msg.replace("frozen", "final freeze"), flush=True)
+
+    out = os.path.join(STATE, "outgoing")
+    os.makedirs(out, exist_ok=True)
+    bundle = os.path.join(out, f"{a.name}.tgz")
+    manifest = {"name": a.name, "meta": m, "files": files, "dirs": dirs, "pids": pids,
+                "from_sprite": sprite_name(), "from_url": url, "email": load_config().get("email"),
+                "packed_at": now()}
+    with tarfile.open(bundle, "w:gz", compresslevel=1) as tar:
+        data = json.dumps(manifest, indent=2).encode()
+        info = tarfile.TarInfo("manifest.json")
+        info.size = len(data)
+        import io
+        tar.addfile(info, io.BytesIO(data))
+        tar.add(os.path.join(agent_dir(a.name), "images"), arcname="images")
+        for f in files:
+            if f["carried"]:
+                tar.add(f["path"], arcname="files" + f["path"], recursive=False)
+    size = os.path.getsize(bundle)
+    ticket = secrets.token_urlsafe(24)
+    tickets = load_tickets()
+    tickets[ticket] = {"name": a.name, "bundle": bundle, "created": now(), "expires": now() + 1800,
+                       "frozen_at": t0}
+    save_tickets(tickets)
+    m["status"] = "away"
+    m["away_since"] = now()
+    save(m)
+    carried = sum(1 for f in files if f["carried"])
+    event("teleport", a.name, bytes=size, files=carried)
+    pull = f"{url}/api/bundle/{ticket}"
+    print(f"cryo: packed {a.name}: {size / 1e6:.1f} MB, {carried} files carried, "
+          f"{len(files) - carried} expected on the other side", flush=True)
+    if a.to:
+        print(f"cryo: asking {a.to} to pull it…", flush=True)
+        r = subprocess.run(["sprite", "exec", "-s", a.to, "--", "sudo", "cryo", "import", pull])
+        if r.returncode == 0:
+            return
+        print(f"cryo: that didn't work from here; run it on {a.to} yourself:", flush=True)
+    else:
+        print("cryo: now run this on the other Sprite (the link works once, for 30 minutes):")
+    print(f"\n  sudo cryo import {pull}\n")
+    print(f"cryo: changed your mind? `sudo cryo thaw {a.name}` here brings it back.")
+
+
+def download(url, path):
+    import urllib.request
+    with urllib.request.urlopen(url, timeout=60) as r, open(path, "wb") as f:
+        total = int(r.headers.get("Content-Length") or 0)
+        got, shown = 0, -1
+        while True:
+            chunk = r.read(1 << 20)
+            if not chunk:
+                break
+            f.write(chunk)
+            got += len(chunk)
+            pct = int(got * 100 / total) if total else -1
+            if total and pct // 10 != shown:
+                shown = pct // 10
+                print(f"cryo: pulling {got / 1e6:.0f}/{total / 1e6:.0f} MB", flush=True)
+    return got
+
+
+def cmd_import(a):
+    import tarfile
+    t0 = now()
+    inc = os.path.join(STATE, "incoming")
+    os.makedirs(inc, exist_ok=True)
+    path = os.path.join(inc, "bundle.tgz")
+    try:
+        download(a.url, path)
+    except Exception as e:
+        sys.exit(f"cryo: couldn't pull the agent: {e}")
+    t_pull = now() - t0
+    with tarfile.open(path, "r:gz") as tar:
+        man = json.load(tar.extractfile("manifest.json"))
+        name, meta = man["name"], man["meta"]
+        problems = []
+        if os.path.exists(os.path.join(agent_dir(name), "meta.json")) and alive(load(name).get("pid")):
+            problems.append(f"an agent called {name} is already running here")
+        taken = [p for p in man["pids"] if os.path.exists(f"/proc/{p}")]
+        if taken:
+            problems.append(f"pids {taken[:5]} are already used here")
+        for f in man["files"]:
+            if f["carried"]:
+                continue
+            if not os.path.isfile(f["path"]):
+                problems.append(f"missing here: {f['path']}")
+            elif os.path.getsize(f["path"]) != f["size"]:
+                problems.append(f"different here: {f['path']} ({os.path.getsize(f['path'])} vs {f['size']} bytes)")
+        if problems:
+            print("cryo: can't land this agent here:\n  " + "\n  ".join(problems[:10]))
+            print("cryo: if those are program files of a different version, teleport again with "
+                  "--carry-max 512 to bring them along.")
+            print(f"cryo: nothing changed. on {man['from_sprite']}, `sudo cryo thaw {name}` brings it back.")
+            sys.exit(1)
+
+        for d in man["dirs"]:
+            os.makedirs(d, exist_ok=True)
+        if meta.get("tmux"):
+            os.makedirs("/tmp/tmux-0", mode=0o700, exist_ok=True)
+        d = agent_dir(name)
+        shutil.rmtree(os.path.join(d, "images"), ignore_errors=True)
+        os.makedirs(d, exist_ok=True)
+        for member in tar.getmembers():
+            if member.name.startswith("images/") and member.isfile():
+                tar.extract(member, d, filter="data") if sys.version_info >= (3, 12) else tar.extract(member, d)
+            elif member.name.startswith("files/") and member.isfile():
+                dest = member.name[len("files"):]
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                tmp = dest + ".cryo-tmp"
+                with tar.extractfile(member) as src, open(tmp, "wb") as out:
+                    shutil.copyfileobj(src, out)
+                os.chmod(tmp, member.mode)
+                os.replace(tmp, dest)   # rename, so a running copy of the file is left alone
+
+    meta.update(status="arriving", boot_id=boot_id(), came_from=man["from_sprite"])
+    save(meta)
+    # the cgroups it lived in belong to the other Sprite; let it join ours
+    ok, msg = thaw(meta, extra=("--manage-cgroups", "ignore"))
+    if not ok:
+        meta["status"] = "frozen"
+        save(meta)
+        print("cryo:", msg)
+        print(f"cryo: on {man['from_sprite']}, `sudo cryo thaw {name}` brings it back there.")
+        sys.exit(1)
+    total = now() - man["packed_at"]
+    meta = load(name)
+    event("arrived", name, from_sprite=man["from_sprite"], seconds=round(total, 1), pull_seconds=round(t_pull, 1))
+    print(f"cryo: {msg}")
+    print(f"cryo: {name} moved from {man['from_sprite']} to {sprite_name()} "
+          f"({total:.1f}s since its last breath there)")
+    try:
+        ticket = a.url.rstrip("/").rsplit("/", 1)[-1]
+        http_json("POST", f"{man['from_url']}/api/landed/{ticket}",
+                  {"sprite": sprite_name(), "seconds": round(total, 1)})
+    except Exception as e:
+        print(f"cryo: (couldn't tell {man['from_sprite']} it landed: {e}; "
+              f"don't thaw it there or you'll have two)")
+    c = load_config()
+    if man.get("email") and not c.get("email"):
+        c["email"] = man["email"]
+        save_config(c)
+    if c.get("email") and not c.get("resend_gateway"):
+        gw = find_resend_gateway()
+        if gw:
+            c["resend_gateway"] = gw
+            save_config(c)
+    send_alert(f"cryo: {name} teleported to {sprite_name()}",
+               f"{name} moved from {man['from_sprite']} to {sprite_name()} with its memory intact.\n\n{msg}")
+    os.remove(path)
+    try:
+        listed = subprocess.run(["sprite-env", "services", "list"], capture_output=True, text=True).stdout
+    except OSError:
+        listed = ""
+    if SERVICE not in listed.split():
+        print("cryo: tip: `sudo cryo install` here keeps it alive across restarts on this Sprite too")
 
 
 # ---------------------------------------------------------------- alerts (Resend connector)
@@ -682,7 +948,7 @@ def public_agent(m):
         "pid": m["pid"], "alive": alive(m["pid"]), "status": m["status"],
         "started": m.get("started"), "last_freeze": m.get("last_freeze"),
         "freeze_seconds": m.get("freeze_seconds"), "image_bytes": m.get("image_bytes"),
-        "thaws": m.get("thaws", 0),
+        "thaws": m.get("thaws", 0), "moved_to": m.get("moved_to"), "came_from": m.get("came_from"),
     }
 
 
@@ -765,10 +1031,30 @@ def cmd_serve(a):
                     return self.send(200, f.read(), "text/html; charset=utf-8")
             if path == "/healthz":
                 return self.send(200, {"ok": True})
+            if path.startswith("/api/bundle/"):
+                return self.bundle(path.rsplit("/", 1)[-1])
             self.send(404, {"error": "not found"})
+
+        def bundle(self, ticket):
+            tickets = load_tickets()
+            t = tickets.get(ticket)
+            if not t or t.get("fetched") or now() > t["expires"] or not os.path.exists(t["bundle"]):
+                return self.send(404, {"error": "no such ticket (they work once, for 30 minutes)"})
+            t["fetched"] = now()
+            save_tickets(tickets)
+            size = os.path.getsize(t["bundle"])
+            self.send_response(200)
+            self.send_header("Content-Type", "application/gzip")
+            self.send_header("Content-Length", str(size))
+            self.end_headers()
+            with open(t["bundle"], "rb") as f:
+                shutil.copyfileobj(f, self.wfile, 1 << 20)
+            event("bundle_sent", t["name"], bytes=size)
 
         def do_POST(self):
             path = self.path.split("?")[0]
+            if path.startswith("/api/landed/"):
+                return self.landed(path.rsplit("/", 1)[-1])
             public_ok = path == "/api/restart" and a.public_restart
             if not (self.authed() or public_ok):
                 return self.send(401, {"error": "unauthorized"})
@@ -789,6 +1075,27 @@ def cmd_serve(a):
                 ok, msg = freeze(m, True) if parts[1] == "freeze" else thaw(m)
                 return self.send(200 if ok else 500, {"ok": ok, "message": msg})
             self.send(404, {"error": "not found"})
+
+        def landed(self, ticket):
+            tickets = load_tickets()
+            t = tickets.get(ticket)
+            if not t or not t.get("fetched"):
+                return self.send(404, {"error": "no such ticket"})
+            try:
+                body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+            except ValueError:
+                body = {}
+            m = load(t["name"])
+            m.update(status="moved", moved_to=str(body.get("sprite", "?"))[:64], moved_at=now())
+            save(m)
+            event("landed", t["name"], to=m["moved_to"], seconds=body.get("seconds"))
+            try:
+                os.remove(t["bundle"])
+            except OSError:
+                pass
+            del tickets[ticket]
+            save_tickets(tickets)
+            self.send(200, {"ok": True})
 
     ThreadingHTTPServer(("0.0.0.0", a.port), H).serve_forever()
 
@@ -816,6 +1123,12 @@ def cmd_install(a):
                  f"try: sprite-env services create {SERVICE} --cmd {WRAPPER}")
     event("install", SERVICE, interval=a.interval)
     print(f"cryo: installed as Sprite service '{SERVICE}' (snapshot after activity, thaw on boot)")
+    c = load_config()
+    if a.url:
+        c["url"] = a.url.rstrip("/")
+    if a.sprite:
+        c["sprite"] = a.sprite
+    save_config(c)
     if a.api:
         extra = " --public-restart" if a.public_restart else ""
         sprite_name = a.sprite or os.uname().nodename
@@ -886,6 +1199,7 @@ def main():
     t = sub.add_parser("thaw", help="bring a frozen process back")
     t.add_argument("name", nargs="?")
     t.add_argument("--all", action="store_true")
+    t.add_argument("--force", action="store_true", help="thaw even if it moved to another Sprite")
     t.set_defaults(fn=cmd_thaw)
 
     b = sub.add_parser("boot", help="thaw everything that died in a restart")
@@ -909,6 +1223,7 @@ def main():
     i.add_argument("--sprite", help="this Sprite's name (for the restart button)")
     i.add_argument("--public-restart", action="store_true")
     i.add_argument("--ui", help="html file for the dashboard")
+    i.add_argument("--url", help="this Sprite's public URL (other Sprites pull teleported agents from it)")
     i.set_defaults(fn=cmd_install)
 
     u = sub.add_parser("uninstall", help="remove the Sprite service")
@@ -948,6 +1263,18 @@ def main():
                     help="let anyone press the restart button (rate limited)")
     sv.add_argument("--restart-cooldown", type=int, default=180)
     sv.set_defaults(fn=cmd_serve)
+
+    tp = sub.add_parser("teleport", help="move a running agent to another Sprite")
+    tp.add_argument("name")
+    tp.add_argument("--to", help="the other Sprite's name (tries `sprite exec` to pull it there)")
+    tp.add_argument("--url", help="this Sprite's public URL, if not set at install")
+    tp.add_argument("--carry-max", type=int, default=64,
+                    help="carry files up to this many MB; bigger ones must already match on the other side")
+    tp.set_defaults(fn=cmd_teleport)
+
+    im = sub.add_parser("import", help="receive an agent teleported from another Sprite")
+    im.add_argument("url", help="the link `cryo teleport` printed")
+    im.set_defaults(fn=cmd_import)
 
     l = sub.add_parser("ls", help="list managed processes")
     l.add_argument("--json", action="store_true")
