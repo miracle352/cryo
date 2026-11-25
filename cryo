@@ -262,7 +262,9 @@ def irmap_paths(meta):
                 pass
             walk(r, 4)
     if want:
-        print(f"cryo: warning, {len(want)} watched file(s) not located", file=sys.stderr)
+        for maj, mnr, ino in sorted(want):
+            print(f"cryo: warning, watched inode {ino} on dev {maj}:{mnr} not located"
+                  " (deleted or replaced file?)", file=sys.stderr)
     return sorted(hits)
 
 
