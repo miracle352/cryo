@@ -1,0 +1,366 @@
+#!/usr/bin/env python3
+"""cryo - keep processes alive across Sprite cold wakes, host moves and checkpoint restores.
+
+Runs as root. Every managed process is started by cryo (so it is root-owned and
+CRIU can ptrace it without CAP_SYS_PTRACE), frozen to disk with CRIU, and thawed
+again when cryo notices the machine has rebooted (boot_id changed).
+"""
+import argparse
+import json
+import os
+import shlex
+import shutil
+import signal
+import subprocess
+import sys
+import time
+
+STATE = os.environ.get("CRYO_HOME", "/var/lib/cryo")
+EVENTS = os.path.join(STATE, "events.jsonl")
+
+
+def boot_id():
+    with open("/proc/sys/kernel/random/boot_id") as f:
+        return f.read().strip()
+
+
+def now():
+    return time.time()
+
+
+def agent_dir(name):
+    return os.path.join(STATE, "agents", name)
+
+
+def load(name):
+    p = os.path.join(agent_dir(name), "meta.json")
+    if not os.path.exists(p):
+        sys.exit(f"cryo: no agent named {name!r}")
+    with open(p) as f:
+        return json.load(f)
+
+
+def save(meta):
+    d = agent_dir(meta["name"])
+    os.makedirs(d, exist_ok=True)
+    tmp = os.path.join(d, "meta.json.tmp")
+    with open(tmp, "w") as f:
+        json.dump(meta, f, indent=2)
+    os.replace(tmp, os.path.join(d, "meta.json"))
+
+
+def all_agents():
+    root = os.path.join(STATE, "agents")
+    if not os.path.isdir(root):
+        return []
+    out = []
+    for n in sorted(os.listdir(root)):
+        if os.path.exists(os.path.join(root, n, "meta.json")):
+            out.append(load(n))
+    return out
+
+
+def event(kind, name, **kw):
+    os.makedirs(STATE, exist_ok=True)
+    rec = {"t": now(), "kind": kind, "agent": name, "boot_id": boot_id(), **kw}
+    with open(EVENTS, "a") as f:
+        f.write(json.dumps(rec) + "\n")
+
+
+def alive(pid):
+    if not pid:
+        return False
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    # zombies count as dead
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            return f.read().split(") ", 1)[1][0] != "Z"
+    except FileNotFoundError:
+        return False
+
+
+def dir_size(path):
+    total = 0
+    for root, _, files in os.walk(path):
+        for fn in files:
+            try:
+                total += os.path.getsize(os.path.join(root, fn))
+            except OSError:
+                pass
+    return total
+
+
+def criu(args, log_dir):
+    """Run criu, return (ok, seconds, error_lines)."""
+    t0 = now()
+    r = subprocess.run(["criu"] + args, capture_output=True, text=True)
+    dt = now() - t0
+    errs = []
+    for line in (r.stderr or "").splitlines():
+        # this one is noise on Sprites: no CAP_SYS_RESOURCE, criu carries on
+        if "RLIMIT_NOFILE" in line:
+            continue
+        if "Error" in line:
+            errs.append(line.strip())
+    log = os.path.join(log_dir, "dump.log" if args[0] == "dump" else "restore.log")
+    if os.path.exists(log):
+        with open(log) as f:
+            errs += [l.strip() for l in f if "Error" in l and "RLIMIT_NOFILE" not in l][-8:]
+    return r.returncode == 0, dt, errs
+
+
+# ---------------------------------------------------------------- commands
+
+def cmd_run(a):
+    name = a.name
+    if os.path.exists(os.path.join(agent_dir(name), "meta.json")) and alive(load(name).get("pid")):
+        sys.exit(f"cryo: {name} is already running")
+    d = agent_dir(name)
+    os.makedirs(d, exist_ok=True)
+    env = dict(os.environ)
+    # CRIU can't dump io_uring rings; libuv (node) falls back to epoll with this
+    env["UV_USE_IO_URING"] = "0"
+    command = a.command
+    if command and command[0] == "--":
+        command = command[1:]
+    if not command:
+        sys.exit("cryo run: give a command, e.g. cryo run web -- python3 app.py")
+
+    if a.tmux:
+        sock = f"cryo-{name}"
+        shell_cmd = " ".join(shlex.quote(c) for c in command)
+        subprocess.run(["tmux", "-L", sock, "kill-server"], capture_output=True)
+        subprocess.run(["tmux", "-L", sock, "new", "-d", "-s", name, "-x", "200", "-y", "50", shell_cmd],
+                       cwd=a.cwd, env=env, check=True)
+        time.sleep(0.5)
+        r = subprocess.run(["tmux", "-L", sock, "display", "-p", "-t", name, "#{pid}"],
+                           capture_output=True, text=True)
+        if r.returncode != 0:
+            sys.exit(f"cryo: tmux session for {name} died right away:\n{r.stderr}")
+        pid = int(r.stdout.strip())
+    else:
+        log = open(os.path.join(d, "output.log"), "ab")
+        p = subprocess.Popen(command, cwd=a.cwd, env=env, stdin=subprocess.DEVNULL,
+                             stdout=log, stderr=log, start_new_session=True)
+        pid = p.pid
+
+    meta = {
+        "name": name, "command": command, "cwd": a.cwd, "tmux": a.tmux,
+        "pid": pid, "status": "running", "started": now(), "boot_id": boot_id(),
+        "last_freeze": None, "freeze_seconds": None, "image_bytes": None,
+        "thaws": 0,
+    }
+    save(meta)
+    event("run", name, pid=pid, command=command)
+    print(f"cryo: {name} running as pid {pid}")
+
+
+def freeze(meta, leave_running):
+    name = meta["name"]
+    d = agent_dir(name)
+    if not alive(meta["pid"]):
+        return False, f"{name}: not running"
+    new = os.path.join(d, "images.new")
+    shutil.rmtree(new, ignore_errors=True)
+    os.makedirs(new)
+    args = ["dump", "-t", str(meta["pid"]), "-D", new, "-o", "dump.log",
+            "--tcp-established", "--file-locks"]
+    if meta.get("tmux"):
+        args.append("--ext-unix-sk")
+    if leave_running:
+        args.append("--leave-running")
+    ok, dt, errs = criu(args, new)
+    if not ok:
+        event("freeze_failed", name, errors=errs)
+        return False, f"{name}: freeze failed\n  " + "\n  ".join(errs[-6:])
+    # Sprites don't grant CAP_SYS_TIME, so restoring a time namespace fails.
+    for fn in os.listdir(new):
+        if fn.startswith("timens-"):
+            os.remove(os.path.join(new, fn))
+    cur = os.path.join(d, "images")
+    old = os.path.join(d, "images.old")
+    shutil.rmtree(old, ignore_errors=True)
+    if os.path.exists(cur):
+        os.rename(cur, old)
+    os.rename(new, cur)
+    shutil.rmtree(old, ignore_errors=True)
+    meta.update(last_freeze=now(), freeze_seconds=round(dt, 3),
+                image_bytes=dir_size(cur), boot_id=boot_id(),
+                status="running" if leave_running else "frozen")
+    save(meta)
+    event("freeze", name, seconds=round(dt, 3), bytes=meta["image_bytes"], leave_running=leave_running)
+    return True, f"{name}: frozen in {dt:.2f}s ({meta['image_bytes'] / 1e6:.1f} MB)"
+
+
+def thaw(meta):
+    name = meta["name"]
+    d = agent_dir(name)
+    img = os.path.join(d, "images")
+    if alive(meta["pid"]):
+        return False, f"{name}: already running (pid {meta['pid']})"
+    if not os.path.isdir(img):
+        return False, f"{name}: nothing frozen to thaw"
+    pidfile = os.path.join(d, "thaw.pid")
+    if os.path.exists(pidfile):
+        os.remove(pidfile)
+    args = ["restore", "-D", img, "-o", "restore.log", "-d", "--tcp-close",
+            "--file-locks", "--pidfile", pidfile]
+    if meta.get("tmux"):
+        args.append("--ext-unix-sk")
+    ok, dt, errs = criu(args, img)
+    if not ok:
+        event("thaw_failed", name, errors=errs)
+        return False, f"{name}: thaw failed\n  " + "\n  ".join(errs[-6:])
+    pid = meta["pid"]
+    if os.path.exists(pidfile):
+        with open(pidfile) as f:
+            pid = int(f.read().strip())
+    lost = now() - (meta.get("last_freeze") or now())
+    meta.update(pid=pid, status="running", boot_id=boot_id(), thaws=meta.get("thaws", 0) + 1)
+    save(meta)
+    event("thaw", name, seconds=round(dt, 3), pid=pid, since_freeze=round(lost, 1))
+    return True, f"{name}: thawed in {dt:.2f}s as pid {pid} (state from {lost:.0f}s before)"
+
+
+def cmd_freeze(a):
+    targets = all_agents() if a.all else [load(a.name)]
+    rc = 0
+    for m in targets:
+        ok, msg = freeze(m, a.keep)
+        print("cryo:", msg)
+        rc |= not ok
+    sys.exit(rc)
+
+
+def cmd_thaw(a):
+    targets = all_agents() if a.all else [load(a.name)]
+    rc = 0
+    for m in targets:
+        ok, msg = thaw(m)
+        print("cryo:", msg)
+        rc |= not ok
+    sys.exit(rc)
+
+
+def cmd_boot(a):
+    """Thaw every agent whose process died because the machine restarted."""
+    bid = boot_id()
+    for m in all_agents():
+        if alive(m["pid"]) or m["status"] == "stopped":
+            continue
+        if m.get("boot_id") != bid:
+            event("reboot_detected", m["name"], old_boot_id=m.get("boot_id"))
+        ok, msg = thaw(m)
+        print("cryo:", msg)
+
+
+def cmd_watch(a):
+    """Thaw anything that died, then keep fresh frozen copies of everything running."""
+    print(f"cryo: watching, snapshot every {a.interval}s")
+    cmd_boot(a)
+    stop = False
+
+    def bye(*_):
+        nonlocal stop
+        stop = True
+    signal.signal(signal.SIGTERM, bye)
+    signal.signal(signal.SIGINT, bye)
+    while not stop:
+        for m in all_agents():
+            if m["status"] == "stopped":
+                continue
+            if alive(m["pid"]):
+                ok, msg = freeze(m, leave_running=True)
+                if not ok:
+                    print("cryo:", msg, flush=True)
+            else:
+                ok, msg = thaw(m)
+                print("cryo:", msg, flush=True)
+        for _ in range(a.interval * 10):
+            if stop:
+                break
+            time.sleep(0.1)
+
+
+def cmd_stop(a):
+    m = load(a.name)
+    if alive(m["pid"]):
+        os.killpg(os.getpgid(m["pid"]), signal.SIGTERM)
+    m["status"] = "stopped"
+    save(m)
+    event("stop", a.name)
+    print(f"cryo: {a.name} stopped (frozen copy kept)")
+
+
+def cmd_ls(a):
+    agents = all_agents()
+    if a.json:
+        for m in agents:
+            m["alive"] = alive(m["pid"])
+        print(json.dumps(agents, indent=2))
+        return
+    if not agents:
+        print("no agents. start one: cryo run NAME -- COMMAND")
+        return
+    print(f"{'NAME':<14}{'PID':>8}  {'STATE':<9}{'LAST FREEZE':>12}{'IMAGE':>10}{'THAWS':>7}")
+    for m in agents:
+        st = "running" if alive(m["pid"]) else m["status"]
+        if st == "running" and not alive(m["pid"]):
+            st = "dead"
+        lf = f"{now() - m['last_freeze']:.0f}s ago" if m.get("last_freeze") else "never"
+        size = f"{m['image_bytes'] / 1e6:.1f}MB" if m.get("image_bytes") else "-"
+        print(f"{m['name']:<14}{m['pid']:>8}  {st:<9}{lf:>12}{size:>10}{m.get('thaws', 0):>7}")
+
+
+def main():
+    if os.geteuid() != 0:
+        sys.exit("cryo needs root (run it with sudo)")
+    p = argparse.ArgumentParser(prog="cryo")
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    r = sub.add_parser("run", help="start a process under cryo")
+    r.add_argument("name")
+    r.add_argument("--tmux", action="store_true", help="run inside a detached tmux session")
+    r.add_argument("--cwd", default=os.getcwd())
+    r.add_argument("command", nargs=argparse.REMAINDER)
+    r.set_defaults(fn=cmd_run)
+
+    f = sub.add_parser("freeze", help="save a process to disk")
+    f.add_argument("name", nargs="?")
+    f.add_argument("--all", action="store_true")
+    f.add_argument("--keep", action="store_true", help="keep it running after the snapshot")
+    f.set_defaults(fn=cmd_freeze)
+
+    t = sub.add_parser("thaw", help="bring a frozen process back")
+    t.add_argument("name", nargs="?")
+    t.add_argument("--all", action="store_true")
+    t.set_defaults(fn=cmd_thaw)
+
+    b = sub.add_parser("boot", help="thaw everything that died in a restart")
+    b.set_defaults(fn=cmd_boot)
+
+    w = sub.add_parser("watch", help="snapshot continuously and thaw after restarts")
+    w.add_argument("--interval", type=int, default=30)
+    w.set_defaults(fn=cmd_watch)
+
+    s = sub.add_parser("stop", help="stop a process and stop managing it")
+    s.add_argument("name")
+    s.set_defaults(fn=cmd_stop)
+
+    l = sub.add_parser("ls", help="list managed processes")
+    l.add_argument("--json", action="store_true")
+    l.set_defaults(fn=cmd_ls)
+
+    a = p.parse_args()
+    if a.cmd in ("freeze", "thaw") and not a.all and not a.name:
+        p.error(f"{a.cmd}: give a name or --all")
+    a.fn(a)
+
+
+if __name__ == "__main__":
+    main()
