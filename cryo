@@ -348,9 +348,11 @@ def freeze(meta, leave_running):
     # File watchers (inotify) are normally dumped as kernel file handles, which
     # needs CAP_DAC_READ_SEARCH. Sprites don't grant it, so make criu resolve
     # watched paths by scanning instead (irmap). Point it at the likely places.
-    args.append("--force-irmap")
-    for path in irmap_paths(meta):
-        args += ["--irmap-scan-path", path]
+    paths = irmap_paths(meta)
+    if paths:
+        args.append("--force-irmap")
+        for path in paths:
+            args += ["--irmap-scan-path", path]
     if leave_running:
         args.append("--leave-running")
     ok, dt, errs = criu(args, new)
