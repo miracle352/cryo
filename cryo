@@ -259,6 +259,22 @@ def process_tree(pid):
     return out
 
 
+def tree_cpu(pid):
+    """Total CPU ticks (user+sys) used by a process tree. CRIU's own dirty-page
+    tracking needs soft-dirty, which the Sprite kernel doesn't have, so cryo uses
+    CPU time as a cheap "did anything happen?" signal: a process that didn't run
+    can't have changed its memory."""
+    total = 0
+    for p in process_tree(pid):
+        try:
+            with open(f"/proc/{p}/stat") as f:
+                fields = f.read().split(") ", 1)[1].split()
+            total += int(fields[11]) + int(fields[12])
+        except (OSError, IndexError, ValueError):
+            pass
+    return total
+
+
 def watched_inodes(pid):
     """(dev, ino) of everything the process tree watches with inotify."""
     found = set()
@@ -370,7 +386,7 @@ def freeze(meta, leave_running):
         os.rename(cur, old)
     os.rename(new, cur)
     shutil.rmtree(old, ignore_errors=True)
-    meta.update(last_freeze=now(), freeze_seconds=round(dt, 3),
+    meta.update(last_freeze=now(), freeze_seconds=round(dt, 3), cpu_at_freeze=tree_cpu(meta["pid"]),
                 image_bytes=dir_size(cur), boot_id=boot_id(),
                 status="running" if leave_running else "frozen")
     save(meta)
@@ -405,7 +421,9 @@ def thaw(meta):
         with open(pidfile) as f:
             pid = int(f.read().strip())
     lost = now() - (meta.get("last_freeze") or now())
-    meta.update(pid=pid, status="running", boot_id=boot_id(), thaws=meta.get("thaws", 0) + 1)
+    # restored tasks start with fresh CPU counters; re-baseline the activity check
+    meta.update(pid=pid, status="running", boot_id=boot_id(), thaws=meta.get("thaws", 0) + 1,
+                cpu_at_freeze=tree_cpu(pid))
     save(meta)
     event("thaw", name, seconds=round(dt, 3), pid=pid, since_freeze=round(lost, 1))
     return True, f"{name}: thawed in {dt:.2f}s as pid {pid} (state from {lost:.0f}s before)"
@@ -449,8 +467,14 @@ def cmd_boot(a):
 
 
 def cmd_watch(a):
-    """Thaw anything that died, then keep fresh frozen copies of everything running."""
-    print(f"cryo: watching, snapshot every {a.interval}s")
+    """Thaw anything that died, then keep a fresh frozen copy of everything running.
+
+    A Sprite pauses whenever nothing is using it, and paused processes can't change,
+    so cryo only re-freezes an agent after it has actually used CPU. It checks every
+    couple of seconds and freezes `settle` seconds after activity, or at least every
+    `interval` seconds of awake time while the agent stays busy."""
+    print(f"cryo: watching (freeze {a.settle}s after activity, at most every {a.interval}s while busy)",
+          flush=True)
     cmd_boot(a)
     stop = False
 
@@ -459,18 +483,33 @@ def cmd_watch(a):
         stop = True
     signal.signal(signal.SIGTERM, bye)
     signal.signal(signal.SIGINT, bye)
+    seen = {}          # name -> (cpu ticks, monotonic time the ticks last moved)
+    froze_at = {}      # name -> monotonic time of our last freeze
     while not stop:
+        t = time.monotonic()
         for m in all_agents():
             if m["status"] == "stopped":
                 continue
-            if alive(m["pid"]):
-                ok, msg = freeze(m, leave_running=True)
-                if not ok:
-                    print("cryo:", msg, flush=True)
-            else:
+            name = m["name"]
+            if not alive(m["pid"]):
                 ok, msg = thaw(m)
                 print("cryo:", msg, flush=True)
-        for _ in range(a.interval * 10):
+                seen.pop(name, None)
+                continue
+            cpu = tree_cpu(m["pid"])
+            prev = seen.get(name)
+            if prev is None or cpu - prev[0] > 1:        # ignore a stray tick
+                seen[name] = (cpu, t)
+            quiet = t - seen[name][1] >= a.settle
+            dirty = m.get("cpu_at_freeze") is None or cpu - m["cpu_at_freeze"] > 3
+            has_image = os.path.isdir(os.path.join(agent_dir(name), "images"))
+            stale = t - froze_at.get(name, -1e9) >= a.interval
+            if not has_image or (dirty and (quiet or stale)):
+                ok, msg = freeze(m, leave_running=True)
+                froze_at[name] = time.monotonic()
+                if not ok:
+                    print("cryo:", msg, flush=True)
+        for _ in range(20):
             if stop:
                 break
             time.sleep(0.1)
@@ -809,7 +848,8 @@ def main():
     b.set_defaults(fn=cmd_boot)
 
     w = sub.add_parser("watch", help="snapshot continuously and thaw after restarts")
-    w.add_argument("--interval", type=int, default=30)
+    w.add_argument("--interval", type=int, default=60)
+    w.add_argument("--settle", type=int, default=5)
     w.set_defaults(fn=cmd_watch)
 
     s = sub.add_parser("stop", help="stop a process and stop managing it")
