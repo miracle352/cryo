@@ -483,7 +483,8 @@ def cmd_watch(a):
         stop = True
     signal.signal(signal.SIGTERM, bye)
     signal.signal(signal.SIGINT, bye)
-    seen = {}          # name -> (cpu ticks, monotonic time the ticks last moved)
+    seen = {}          # name -> (cpu ticks at last check, monotonic time of last burst)
+    burst = {}         # name -> cpu ticks spent in bursts since our last freeze
     froze_at = {}      # name -> monotonic time of our last freeze
     while not stop:
         t = time.monotonic()
@@ -495,24 +496,30 @@ def cmd_watch(a):
                 ok, msg = thaw(m)
                 print("cryo:", msg, flush=True)
                 seen.pop(name, None)
+                burst.pop(name, None)
                 continue
             cpu = tree_cpu(m["pid"])
             prev = seen.get(name)
-            if prev is None or cpu - prev[0] > 1:        # ignore a stray tick
-                seen[name] = (cpu, t)
-            quiet = t - seen[name][1] >= a.settle
+            last_burst = prev[1] if prev else t
+            if prev is not None:
+                step = cpu - prev[0]
+                # an idle agent still ticks (timers, a blinking cursor, a spinner).
+                # only checks where it used a real slice of CPU count as work, so
+                # background ticking never adds up to a snapshot on its own
+                if step >= a.burst:
+                    burst[name] = burst.get(name, 0) + step
+                    last_burst = t
+            seen[name] = (cpu, last_burst)
+            quiet = t - last_burst >= a.settle
             base = m.get("cpu_at_freeze")
-            used = cpu - base if base is not None else 1 << 30
-            # an idle agent still ticks a little (timers, a blinking cursor); only a
-            # real burst of work (>= work_ticks) earns a snapshot right away, small
-            # drift gets folded in every `drift` seconds
-            worked = used >= a.work_ticks
-            drifted = used > 3 and t - froze_at.get(name, -1e9) >= a.drift
+            worked = base is None or burst.get(name, 0) >= a.work_ticks
+            since = t - froze_at.get(name, -1e9)
+            drifted = base is not None and cpu - base > 3 and since >= a.drift
             has_image = os.path.isdir(os.path.join(agent_dir(name), "images"))
-            stale = t - froze_at.get(name, -1e9) >= a.interval
-            if not has_image or (worked and (quiet or stale)) or drifted:
+            if not has_image or (worked and (quiet or since >= a.interval)) or drifted:
                 ok, msg = freeze(m, leave_running=True)
                 froze_at[name] = time.monotonic()
+                burst[name] = 0
                 if not ok:
                     print("cryo:", msg, flush=True)
         for _ in range(20):
@@ -888,6 +895,7 @@ def main():
     w.add_argument("--interval", type=int, default=60)
     w.add_argument("--settle", type=int, default=5)
     w.add_argument("--work-ticks", type=int, default=30, help="CPU ticks (1/100 s) that count as real work")
+    w.add_argument("--burst", type=int, default=10, help="CPU ticks in one 2 s check that count as activity (10 = 5%% CPU)")
     w.add_argument("--drift", type=int, default=900, help="fold in small idle changes this often (s)")
     w.set_defaults(fn=cmd_watch)
 
