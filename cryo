@@ -28,15 +28,54 @@ def now():
     return time.time()
 
 
-def no_io_uring():
-    """CRIU can't dump io_uring rings. With io_uring_disabled=2 the syscall fails
-    and node/libuv/bun quietly fall back to epoll. Kernel setting, so it has to be
-    re-applied after every reboot."""
-    try:
-        with open("/proc/sys/kernel/io_uring_disabled", "w") as f:
-            f.write("2")
-    except OSError as e:
-        print(f"cryo: warning, could not disable io_uring ({e})", file=sys.stderr)
+# Two kernel features that CRIU can't checkpoint on a Sprite:
+#  - io_uring rings (criu has no support for them at all)
+#  - inotify watches on regular files: the root fs is an overlay, files report the
+#    lower layer's st_dev while the watch records the overlay's, so neither
+#    open_by_handle_at (needs CAP_DAC_READ_SEARCH, which Sprites don't grant) nor
+#    criu's irmap can find them.
+# cryo starts agents under a small seccomp filter that makes these syscalls fail
+# with ENOSYS. Runtimes then fall back (libuv/bun -> epoll, file watchers -> off or
+# polling). The filter is inherited by children and checkpointed by CRIU itself.
+X86_64 = 0xC000003E
+BLOCKED_SYSCALLS = {
+    "io_uring_setup": 425,
+    "inotify_init": 253,
+    "inotify_init1": 294,
+    "fanotify_init": 300,
+}
+
+
+def seccomp_blocker(blocked=tuple(BLOCKED_SYSCALLS.values()), errno_=38):
+    import ctypes
+    import struct
+
+    def ins(code, jt, jf, k):
+        return struct.pack("HBBI", code, jt, jf, k)
+
+    LD_ABS, JEQ, RET = 0x20, 0x15, 0x06
+    allow, deny = 0x7FFF0000, 0x00050000 | errno_
+    n = len(blocked)
+    prog = [ins(LD_ABS, 0, 0, 4),                 # arch
+            ins(JEQ, 0, n + 2, X86_64),           # not x86_64 -> allow
+            ins(LD_ABS, 0, 0, 0)]                 # syscall nr
+    for i, nr in enumerate(blocked):
+        prog.append(ins(JEQ, n - i, 0, nr))       # match -> deny
+    prog += [ins(RET, 0, 0, allow), ins(RET, 0, 0, deny)]
+    raw = b"".join(prog)
+
+    def apply():
+        libc = ctypes.CDLL(None, use_errno=True)
+        buf = ctypes.create_string_buffer(raw, len(raw))
+
+        class SockFprog(ctypes.Structure):
+            _fields_ = [("len", ctypes.c_ushort), ("filter", ctypes.c_void_p)]
+        fp = SockFprog(len(prog), ctypes.addressof(buf))
+        if libc.prctl(38, 1, 0, 0, 0) != 0:                      # PR_SET_NO_NEW_PRIVS
+            raise OSError(ctypes.get_errno(), "PR_SET_NO_NEW_PRIVS")
+        if libc.prctl(22, 2, ctypes.byref(fp), 0, 0) != 0:       # PR_SET_SECCOMP, FILTER
+            raise OSError(ctypes.get_errno(), "PR_SET_SECCOMP")
+    return apply
 
 
 def agent_dir(name):
@@ -138,8 +177,8 @@ def cmd_run(a):
     d = agent_dir(name)
     os.makedirs(d, exist_ok=True)
     env = dict(os.environ)
-    # CRIU can't dump io_uring rings; libuv (node) falls back to epoll with this
     env["UV_USE_IO_URING"] = "0"
+    blocker = None if a.no_filter else seccomp_blocker()
     command = a.command
     if command and command[0] == "--":
         command = command[1:]
@@ -151,7 +190,7 @@ def cmd_run(a):
         shell_cmd = " ".join(shlex.quote(c) for c in command)
         subprocess.run(["tmux", "-L", sock, "kill-server"], capture_output=True)
         subprocess.run(["tmux", "-L", sock, "new", "-d", "-s", name, "-x", "200", "-y", "50", shell_cmd],
-                       cwd=a.cwd, env=env, check=True)
+                       cwd=a.cwd, env=env, check=True, preexec_fn=blocker)
         time.sleep(0.5)
         r = subprocess.run(["tmux", "-L", sock, "display", "-p", "-t", name, "#{pid}"],
                            capture_output=True, text=True)
@@ -161,7 +200,8 @@ def cmd_run(a):
     else:
         log = open(os.path.join(d, "output.log"), "ab")
         p = subprocess.Popen(command, cwd=a.cwd, env=env, stdin=subprocess.DEVNULL,
-                             stdout=log, stderr=log, start_new_session=True)
+                             stdout=log, stderr=log, start_new_session=True,
+                             preexec_fn=blocker)
         pid = p.pid
 
     meta = {
@@ -441,6 +481,8 @@ def main():
     r.add_argument("name")
     r.add_argument("--tmux", action="store_true", help="run inside a detached tmux session")
     r.add_argument("--cwd", default=os.getcwd())
+    r.add_argument("--no-filter", action="store_true",
+                   help="don't block io_uring/inotify (freezing may then fail)")
     r.add_argument("command", nargs="*", help="after --")
     r.set_defaults(fn=cmd_run)
 
@@ -471,7 +513,6 @@ def main():
     l.set_defaults(fn=cmd_ls)
 
     a = p.parse_args()
-    no_io_uring()
     if a.cmd in ("freeze", "thaw") and not a.all and not a.name:
         p.error(f"{a.cmd}: give a name or --all")
     a.fn(a)
