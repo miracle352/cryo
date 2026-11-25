@@ -175,14 +175,95 @@ def cmd_run(a):
     print(f"cryo: {name} running as pid {pid}")
 
 
-def irmap_paths(meta):
-    paths = [meta.get("cwd"), os.environ.get("HOME"), "/home", "/root", "/tmp", "/etc"]
-    seen, out = set(), []
-    for p in paths:
-        if p and os.path.isdir(p) and p not in seen:
-            seen.add(p)
-            out.append(p)
+def process_tree(pid):
+    kids = {}
+    for d in os.listdir("/proc"):
+        if not d.isdigit():
+            continue
+        try:
+            with open(f"/proc/{d}/stat") as f:
+                ppid = int(f.read().split(") ", 1)[1].split()[1])
+        except (OSError, IndexError, ValueError):
+            continue
+        kids.setdefault(ppid, []).append(int(d))
+    out, todo = [], [pid]
+    while todo:
+        p = todo.pop()
+        out.append(p)
+        todo += kids.get(p, [])
     return out
+
+
+def watched_inodes(pid):
+    """(dev, ino) of everything the process tree watches with inotify."""
+    found = set()
+    for p in process_tree(pid):
+        try:
+            fds = os.listdir(f"/proc/{p}/fdinfo")
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                with open(f"/proc/{p}/fdinfo/{fd}") as f:
+                    for line in f:
+                        if line.startswith("inotify "):
+                            kv = dict(x.split(":", 1) for x in line.split()[1:] if ":" in x)
+                            sdev = int(kv["sdev"], 16)  # kernel dev_t: major<<20 | minor
+                            found.add((sdev >> 20, sdev & 0xFFFFF, int(kv["ino"], 16)))
+            except (OSError, KeyError, ValueError):
+                continue
+    return found
+
+
+SKIP = {"node_modules", ".git", ".cache", "proc", "sys", ".npm", ".cargo", "site-packages"}
+
+
+def irmap_paths(meta):
+    """criu's irmap scan of a hint directory only looks one level deep, so give it
+    the exact parent directory of every watched file. Find those by walking the
+    usual places (cwd, home, /root, /tmp, /etc) a few levels down."""
+    want = watched_inodes(meta["pid"])
+    if not want:
+        return []
+    roots = [meta.get("cwd"), os.environ.get("HOME"), "/home", "/root", "/tmp", "/etc"]
+    hits = set()
+
+    def walk(path, depth):
+        if not want or depth < 0:
+            return
+        try:
+            entries = list(os.scandir(path))
+        except OSError:
+            return
+        for e in entries:
+            try:
+                st = e.stat(follow_symlinks=False)
+            except OSError:
+                continue
+            key = (os.major(st.st_dev), os.minor(st.st_dev), st.st_ino)
+            if key in want:
+                want.discard(key)
+                hits.add(path)
+                if e.is_dir(follow_symlinks=False):
+                    hits.add(e.path)
+            if e.is_dir(follow_symlinks=False) and e.name not in SKIP:
+                walk(e.path, depth - 1)
+
+    for r in roots:
+        if r and os.path.isdir(r):
+            try:
+                st = os.stat(r)
+                key = (os.major(st.st_dev), os.minor(st.st_dev), st.st_ino)
+                if key in want:
+                    want.discard(key)
+                    hits.add(os.path.dirname(r) or "/")
+                    hits.add(r)
+            except OSError:
+                pass
+            walk(r, 4)
+    if want:
+        print(f"cryo: warning, {len(want)} watched file(s) not located", file=sys.stderr)
+    return sorted(hits)
 
 
 def freeze(meta, leave_running):
