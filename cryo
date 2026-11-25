@@ -437,10 +437,15 @@ def cmd_boot(a):
     for m in all_agents():
         if alive(m["pid"]) or m["status"] == "stopped":
             continue
-        if m.get("boot_id") != bid:
+        restarted = m.get("boot_id") != bid
+        if restarted:
             event("reboot_detected", m["name"], old_boot_id=m.get("boot_id"))
         ok, msg = thaw(m)
-        print("cryo:", msg)
+        print("cryo:", msg, flush=True)
+        if restarted:
+            host = os.uname().nodename
+            send_alert(f"cryo: {m['name']} survived a restart" if ok else f"cryo: {m['name']} did NOT come back",
+                       f"{msg}\n\nSprite: {host}\nTime: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
 
 
 def cmd_watch(a):
@@ -480,6 +485,97 @@ def cmd_stop(a):
     event("stop", a.name)
     print(f"cryo: {a.name} stopped (frozen copy kept)")
 
+
+
+# ---------------------------------------------------------------- alerts (Resend connector)
+
+CONFIG = os.path.join(STATE, "config.json")
+GATEWAY = "https://api.sprites.dev/v1/gateway"
+
+
+def load_config():
+    if os.path.exists(CONFIG):
+        with open(CONFIG) as f:
+            return json.load(f)
+    return {}
+
+
+def save_config(c):
+    os.makedirs(STATE, exist_ok=True)
+    with open(CONFIG, "w") as f:
+        json.dump(c, f, indent=2)
+
+
+def http_json(method, url, body=None, timeout=15):
+    import urllib.request
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method,
+                                 headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=timeout) as r:
+        raw = r.read()
+    return json.loads(raw) if raw else {}
+
+
+def find_resend_gateway():
+    """Ask the Sprites gateway which connectors this Sprite may use and pick Resend.
+    The key never comes near us: the gateway adds it on the way out."""
+    listing = http_json("GET", f"{GATEWAY}/list")
+    found = []
+
+    def walk(x):
+        if isinstance(x, dict):
+            blob = json.dumps(x).lower()
+            if "resend" in blob:
+                for k in ("base_url", "url", "gateway_url"):
+                    v = x.get(k)
+                    if isinstance(v, str) and "/gateway/resend/" in v:
+                        found.append(v.rstrip("/"))
+                cid = x.get("connection_id") or x.get("id")
+                if isinstance(cid, str) and cid.startswith("conn_"):
+                    found.append(f"{GATEWAY}/resend/{cid}")
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+    walk(listing)
+    return found[0] if found else None
+
+
+def send_alert(subject, text):
+    c = load_config()
+    to, gw = c.get("email"), c.get("resend_gateway")
+    if not to or not gw:
+        return False
+    try:
+        http_json("POST", f"{gw}/emails", {
+            "from": c.get("from", "cryo <onboarding@resend.dev>"),
+            "to": [to], "subject": subject, "text": text,
+        })
+        event("alert", "*", subject=subject)
+        return True
+    except Exception as e:  # never let an alert break freezing/thawing
+        event("alert_failed", "*", error=str(e)[:200])
+        return False
+
+
+def cmd_alerts(a):
+    c = load_config()
+    if a.email:
+        c["email"] = a.email
+    if a.gateway:
+        c["resend_gateway"] = a.gateway.rstrip("/")
+    if not c.get("resend_gateway"):
+        gw = find_resend_gateway()
+        if not gw:
+            sys.exit("cryo: couldn't find a Resend connector this Sprite may use.\n"
+                     "check the connector's access policy, or pass --gateway with the URL from its page")
+        c["resend_gateway"] = gw
+    save_config(c)
+    print(f"cryo: alerts go to {c.get('email')} via {c['resend_gateway']}")
+    if a.test:
+        ok = send_alert("cryo test", "If you can read this, cryo can reach you through the Sprites Resend connector.")
+        print("cryo: test email sent" if ok else "cryo: test email failed, see: cryo events")
 
 
 # ---------------------------------------------------------------- http api
@@ -730,6 +826,16 @@ def main():
 
     u = sub.add_parser("uninstall", help="remove the Sprite service")
     u.set_defaults(fn=cmd_uninstall)
+
+    al = sub.add_parser("alerts", help="email alerts through the Sprites Resend connector")
+    al.add_argument("--email", help="where to send alerts")
+    al.add_argument("--gateway", help="Resend gateway URL from the connector page (auto-detected if omitted)")
+    al.add_argument("--test", action="store_true", help="send a test email")
+    al.set_defaults(fn=cmd_alerts)
+
+    ev = sub.add_parser("events", help="show the last events")
+    ev.add_argument("-n", type=int, default=20)
+    ev.set_defaults(fn=lambda a: [print(json.dumps(e)) for e in read_events(a.n)])
 
     sv = sub.add_parser("serve", help="small http api for the dashboard")
     sv.add_argument("--port", type=int, default=8080)
