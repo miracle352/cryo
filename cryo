@@ -518,7 +518,9 @@ def read_events(limit):
     for l in lines:
         try:
             e = json.loads(l)
-            e.pop("errors", None) if e.get("kind") not in ("freeze_failed", "thaw_failed") else None
+            # the api can be public: never echo command lines (they can carry secrets)
+            e.pop("command", None)
+            e.pop("output", None)
             out.append(e)
         except ValueError:
             pass
