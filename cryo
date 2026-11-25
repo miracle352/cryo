@@ -28,6 +28,17 @@ def now():
     return time.time()
 
 
+def no_io_uring():
+    """CRIU can't dump io_uring rings. With io_uring_disabled=2 the syscall fails
+    and node/libuv/bun quietly fall back to epoll. Kernel setting, so it has to be
+    re-applied after every reboot."""
+    try:
+        with open("/proc/sys/kernel/io_uring_disabled", "w") as f:
+            f.write("2")
+    except OSError as e:
+        print(f"cryo: warning, could not disable io_uring ({e})", file=sys.stderr)
+
+
 def agent_dir(name):
     return os.path.join(STATE, "agents", name)
 
@@ -357,6 +368,7 @@ def main():
     l.set_defaults(fn=cmd_ls)
 
     a = p.parse_args()
+    no_io_uring()
     if a.cmd in ("freeze", "thaw") and not a.all and not a.name:
         p.error(f"{a.cmd}: give a name or --all")
     a.fn(a)
