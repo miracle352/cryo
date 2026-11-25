@@ -179,6 +179,21 @@ def criu(args, log_dir):
 
 # ---------------------------------------------------------------- commands
 
+def high_pids():
+    """CRIU restores a process with its original PID. After a restart, early boot
+    processes get low PIDs, so start agents far above them to avoid collisions."""
+    try:
+        with open("/proc/sys/kernel/pid_max") as f:
+            pid_max = int(f.read())
+        base = min(pid_max - 100000, 300000)
+        if base > 20000:
+            import random
+            with open("/proc/sys/kernel/ns_last_pid", "w") as f:
+                f.write(str(base + random.randint(0, 50000)))
+    except (OSError, ValueError):
+        pass
+
+
 def cmd_run(a):
     name = a.name
     if os.path.exists(os.path.join(agent_dir(name), "meta.json")) and alive(load(name).get("pid")):
@@ -194,6 +209,7 @@ def cmd_run(a):
     if not command:
         sys.exit("cryo run: give a command, e.g. cryo run web -- python3 app.py")
 
+    high_pids()
     if a.tmux:
         sock = f"cryo-{name}"
         shell_cmd = " ".join(shlex.quote(c) for c in command)
@@ -368,6 +384,9 @@ def thaw(meta):
         return False, f"{name}: already running (pid {meta['pid']})"
     if not os.path.isdir(img):
         return False, f"{name}: nothing frozen to thaw"
+    if os.path.exists(f"/proc/{meta['pid']}"):
+        event("thaw_failed", name, errors=[f"pid {meta['pid']} is taken by another process"])
+        return False, f"{name}: pid {meta['pid']} is taken by another process, can't thaw"
     pidfile = os.path.join(d, "thaw.pid")
     if os.path.exists(pidfile):
         os.remove(pidfile)
@@ -460,8 +479,142 @@ def cmd_stop(a):
     print(f"cryo: {a.name} stopped (frozen copy kept)")
 
 
+
+# ---------------------------------------------------------------- http api
+
+TOKEN_FILE = os.path.join(STATE, "api_token")
+
+
+def api_token():
+    os.makedirs(STATE, exist_ok=True)
+    if not os.path.exists(TOKEN_FILE):
+        import secrets
+        with open(TOKEN_FILE, "w") as f:
+            f.write(secrets.token_urlsafe(24))
+        os.chmod(TOKEN_FILE, 0o600)
+    with open(TOKEN_FILE) as f:
+        return f.read().strip()
+
+
+def public_agent(m):
+    return {
+        "name": m["name"],
+        "program": os.path.basename(m["command"][0]) if m.get("command") else "?",
+        "pid": m["pid"], "alive": alive(m["pid"]), "status": m["status"],
+        "started": m.get("started"), "last_freeze": m.get("last_freeze"),
+        "freeze_seconds": m.get("freeze_seconds"), "image_bytes": m.get("image_bytes"),
+        "thaws": m.get("thaws", 0),
+    }
+
+
+def read_events(limit):
+    if not os.path.exists(EVENTS):
+        return []
+    with open(EVENTS) as f:
+        lines = f.readlines()[-limit:]
+    out = []
+    for l in lines:
+        try:
+            e = json.loads(l)
+            e.pop("errors", None) if e.get("kind") not in ("freeze_failed", "thaw_failed") else None
+            out.append(e)
+        except ValueError:
+            pass
+    return out
+
+
+def cmd_serve(a):
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    token = api_token()
+    last_restart = [0.0]
+    print(f"cryo: api on :{a.port}  (token in {TOKEN_FILE})", flush=True)
+
+    def restart_sprite():
+        # take a checkpoint (it includes the newest frozen images), then restore it.
+        # Restoring restarts every process on the Sprite, including this server;
+        # the cryo service comes back up and thaws the agents.
+        name = a.sprite or os.environ.get("SPRITE_NAME") or os.uname().nodename
+        for m in all_agents():
+            if alive(m["pid"]) and m["status"] != "stopped":
+                freeze(m, leave_running=True)
+        event("restart_requested", "*", sprite=name)
+        r = subprocess.run(["sprite", "checkpoint", "create", "-s", name, "--comment", "cryo restart"],
+                           capture_output=True, text=True)
+        import re
+        mm = re.search(r"\b(v\d+)\b", r.stdout + r.stderr)
+        if not mm:
+            event("restart_failed", "*", output=(r.stdout + r.stderr)[-300:])
+            return
+        subprocess.Popen(["sprite", "restore", "-s", name, mm.group(1)],
+                         stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def send(self, code, body, ctype="application/json"):
+            data = body if isinstance(body, bytes) else json.dumps(body).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", ctype)
+            self.send_header("Access-Control-Allow-Origin", "*")
+            self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def authed(self):
+            return self.headers.get("Authorization", "") == f"Bearer {token}"
+
+        def do_OPTIONS(self):
+            self.send(204, b"")
+
+        def do_GET(self):
+            path = self.path.split("?")[0]
+            if path == "/api/state":
+                return self.send(200, {
+                    "sprite": a.sprite or os.environ.get("SPRITE_NAME") or os.uname().nodename,
+                    "environment": boot_id(), "now": now(),
+                    "agents": [public_agent(m) for m in all_agents()],
+                })
+            if path == "/api/events":
+                return self.send(200, read_events(300))
+            if path in ("/", "/index.html") and a.ui and os.path.exists(a.ui):
+                with open(a.ui, "rb") as f:
+                    return self.send(200, f.read(), "text/html; charset=utf-8")
+            if path == "/healthz":
+                return self.send(200, {"ok": True})
+            self.send(404, {"error": "not found"})
+
+        def do_POST(self):
+            path = self.path.split("?")[0]
+            public_ok = path == "/api/restart" and a.public_restart
+            if not (self.authed() or public_ok):
+                return self.send(401, {"error": "unauthorized"})
+            if path == "/api/restart":
+                if now() - last_restart[0] < a.restart_cooldown:
+                    wait = int(a.restart_cooldown - (now() - last_restart[0]))
+                    return self.send(429, {"error": f"cooling down, try again in {wait}s"})
+                last_restart[0] = now()
+                import threading
+                threading.Thread(target=restart_sprite, daemon=True).start()
+                return self.send(202, {"ok": True, "message": "restarting the Sprite"})
+            parts = path.strip("/").split("/")
+            if len(parts) == 3 and parts[0] == "api" and parts[1] in ("freeze", "thaw"):
+                try:
+                    m = load(parts[2])
+                except SystemExit:
+                    return self.send(404, {"error": "no such agent"})
+                ok, msg = freeze(m, True) if parts[1] == "freeze" else thaw(m)
+                return self.send(200 if ok else 500, {"ok": ok, "message": msg})
+            self.send(404, {"error": "not found"})
+
+    ThreadingHTTPServer(("0.0.0.0", a.port), H).serve_forever()
+
 SERVICE = "cryo"
 WRAPPER = "/usr/local/sbin/cryo-watch"
+API_SERVICE = "cryo-api"
+API_WRAPPER = "/usr/local/sbin/cryo-api"
 
 
 def cmd_install(a):
@@ -482,10 +635,27 @@ def cmd_install(a):
                  f"try: sprite-env services create {SERVICE} --cmd {WRAPPER}")
     event("install", SERVICE, interval=a.interval)
     print(f"cryo: installed as Sprite service '{SERVICE}' (snapshot every {a.interval}s, thaw on boot)")
+    if a.api:
+        extra = " --public-restart" if a.public_restart else ""
+        sprite_name = a.sprite or os.uname().nodename
+        with open(API_WRAPPER, "w") as f:
+            f.write("#!/bin/sh\n"
+                    f"exec sudo env PATH={shlex.quote(os.environ.get('PATH', ''))} "
+                    f"HOME={shlex.quote(os.environ.get('HOME', '/root'))} "
+                    f"{shlex.quote(me)} serve --port 8080 --sprite {shlex.quote(sprite_name)}{extra}"
+                    f"{' --ui ' + shlex.quote(os.path.realpath(a.ui)) if a.ui else ''}\n")
+        os.chmod(API_WRAPPER, 0o755)
+        subprocess.run(["sprite-env", "services", "delete", API_SERVICE], capture_output=True)
+        r = subprocess.run(["sprite-env", "services", "create", API_SERVICE, "--cmd", API_WRAPPER,
+                            "--http-port", "8080", "--no-stream"], capture_output=True, text=True)
+        if r.returncode != 0:
+            sys.exit(f"cryo: could not create the api service:\n{r.stdout}{r.stderr}")
+        print(f"cryo: api service '{API_SERVICE}' on the Sprite URL, admin token: {api_token()}")
 
 
 def cmd_uninstall(a):
     subprocess.run(["sprite-env", "services", "delete", SERVICE])
+    subprocess.run(["sprite-env", "services", "delete", API_SERVICE], capture_output=True)
     print("cryo: service removed")
 
 
@@ -548,10 +718,23 @@ def main():
 
     i = sub.add_parser("install", help="run cryo watch as a Sprite service on every boot")
     i.add_argument("--interval", type=int, default=60)
+    i.add_argument("--api", action="store_true", help="also serve the dashboard api on the Sprite URL")
+    i.add_argument("--sprite", help="this Sprite's name (for the restart button)")
+    i.add_argument("--public-restart", action="store_true")
+    i.add_argument("--ui", help="html file for the dashboard")
     i.set_defaults(fn=cmd_install)
 
     u = sub.add_parser("uninstall", help="remove the Sprite service")
     u.set_defaults(fn=cmd_uninstall)
+
+    sv = sub.add_parser("serve", help="small http api for the dashboard")
+    sv.add_argument("--port", type=int, default=8080)
+    sv.add_argument("--sprite", help="sprite name (for the restart button)")
+    sv.add_argument("--ui", help="html file to serve at /")
+    sv.add_argument("--public-restart", action="store_true",
+                    help="let anyone press the restart button (rate limited)")
+    sv.add_argument("--restart-cooldown", type=int, default=180)
+    sv.set_defaults(fn=cmd_serve)
 
     l = sub.add_parser("ls", help="list managed processes")
     l.add_argument("--json", action="store_true")
