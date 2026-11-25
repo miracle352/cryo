@@ -106,6 +106,10 @@ def dir_size(path):
     return total
 
 
+# Open TCP connections (an agent talking to its model API) are dumped with
+# --tcp-established and come back closed (--tcp-close); the client reconnects.
+# CRIU normally locks them with iptables while dumping, but there's no iptables
+# on a Sprite and we don't need the lock when the sockets are restored closed.
 def criu(args, log_dir):
     """Run criu, return (ok, seconds, error_lines)."""
     t0 = now()
@@ -180,7 +184,7 @@ def freeze(meta, leave_running):
     shutil.rmtree(new, ignore_errors=True)
     os.makedirs(new)
     args = ["dump", "-t", str(meta["pid"]), "-D", new, "-o", "dump.log",
-            "--tcp-established", "--file-locks"]
+            "--tcp-established", "--file-locks", "--network-lock", "skip"]
     if meta.get("tmux"):
         args.append("--ext-unix-sk")
     if leave_running:
@@ -220,7 +224,7 @@ def thaw(meta):
     if os.path.exists(pidfile):
         os.remove(pidfile)
     args = ["restore", "-D", img, "-o", "restore.log", "-d", "--tcp-close",
-            "--file-locks", "--pidfile", pidfile]
+            "--file-locks", "--network-lock", "skip", "--pidfile", pidfile]
     if meta.get("tmux"):
         args.append("--ext-unix-sk")
     ok, dt, errs = criu(args, img)
