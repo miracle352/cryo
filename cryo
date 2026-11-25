@@ -455,7 +455,11 @@ def cmd_thaw(a):
             rc = 1
             continue
         recalled = m["status"] in ("away", "leaving")
-        ok, msg = thaw(m)
+        arriving = bool(m.get("landing"))
+        ok, msg = thaw(m, extra=MOVED_ARGS if m.get("came_from") else ())
+        if ok and arriving:
+            landed(load(m["name"]), msg)
+            continue
         if ok and recalled:
             # called back: the teleport link must stop working
             tickets = load_tickets()
@@ -573,6 +577,8 @@ def cmd_stop(a):
 SYSTEM_DIRS = ("/usr/", "/lib/", "/lib32/", "/lib64/", "/bin/", "/sbin/", "/etc/",
                "/proc/", "/sys/", "/dev/", "/run/", "/snap/", "/opt/")
 TICKETS = os.path.join(STATE, "tickets.json")
+# the cgroups a teleported agent lived in belong to the other Sprite; let it join ours
+MOVED_ARGS = ("--manage-cgroups=ignore",)
 
 
 def files_in_use(pid):
@@ -765,32 +771,42 @@ def cmd_import(a):
                 os.chmod(tmp, member.mode)
                 os.replace(tmp, dest)   # rename, so a running copy of the file is left alone
 
-    meta.update(status="arriving", boot_id=boot_id(), came_from=man["from_sprite"])
+    ticket = a.url.rstrip("/").rsplit("/", 1)[-1]
+    meta.update(status="arriving", boot_id=boot_id(), came_from=man["from_sprite"],
+                landing={"url": man["from_url"], "ticket": ticket, "packed_at": man["packed_at"],
+                         "email": man.get("email")})
     save(meta)
     # the cgroups it lived in belong to the other Sprite; let it join ours
-    ok, msg = thaw(meta, extra=("--manage-cgroups", "ignore"))
+    ok, msg = thaw(meta, extra=MOVED_ARGS)
     if not ok:
         meta["status"] = "frozen"
         save(meta)
         print("cryo:", msg)
-        print(f"cryo: on {man['from_sprite']}, `sudo cryo thaw {name}` brings it back there.")
+        print(f"cryo: the images are here now; fix the problem and `sudo cryo thaw {name}` to land it,")
+        print(f"cryo: or on {man['from_sprite']}, `sudo cryo thaw {name}` brings it back there.")
         sys.exit(1)
-    total = now() - man["packed_at"]
-    meta = load(name)
-    event("arrived", name, from_sprite=man["from_sprite"], seconds=round(total, 1), pull_seconds=round(t_pull, 1))
+    os.remove(path)
+    landed(load(name), msg)
+
+
+def landed(meta, msg):
+    """A teleported agent is running here: tell the Sprite it came from, and the owner."""
+    name, land = meta["name"], meta.get("landing") or {}
+    total = now() - land.get("packed_at", now())
+    src = meta.get("came_from", "?")
+    event("arrived", name, from_sprite=src, seconds=round(total, 1))
     print(f"cryo: {msg}")
-    print(f"cryo: {name} moved from {man['from_sprite']} to {sprite_name()} "
-          f"({total:.1f}s since its last breath there)")
+    print(f"cryo: {name} moved from {src} to {sprite_name()} ({total:.1f}s since its last breath there)")
     try:
-        ticket = a.url.rstrip("/").rsplit("/", 1)[-1]
-        http_json("POST", f"{man['from_url']}/api/landed/{ticket}",
+        http_json("POST", f"{land['url']}/api/landed/{land['ticket']}",
                   {"sprite": sprite_name(), "seconds": round(total, 1)})
     except Exception as e:
-        print(f"cryo: (couldn't tell {man['from_sprite']} it landed: {e}; "
-              f"don't thaw it there or you'll have two)")
+        print(f"cryo: (couldn't tell {src} it landed: {e}; don't thaw it there or you'll have two)")
+    meta.pop("landing", None)
+    save(meta)
     c = load_config()
-    if man.get("email") and not c.get("email"):
-        c["email"] = man["email"]
+    if land.get("email") and not c.get("email"):
+        c["email"] = land["email"]
         save_config(c)
     if c.get("email") and not c.get("resend_gateway"):
         gw = find_resend_gateway()
@@ -798,8 +814,7 @@ def cmd_import(a):
             c["resend_gateway"] = gw
             save_config(c)
     send_alert(f"cryo: {name} teleported to {sprite_name()}",
-               f"{name} moved from {man['from_sprite']} to {sprite_name()} with its memory intact.\n\n{msg}")
-    os.remove(path)
+               f"{name} moved from {src} to {sprite_name()} with its memory intact.\n\n{msg}")
     try:
         listed = subprocess.run(["sprite-env", "services", "list"], capture_output=True, text=True).stdout
     except OSError:
