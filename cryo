@@ -338,7 +338,7 @@ def main():
     r.add_argument("name")
     r.add_argument("--tmux", action="store_true", help="run inside a detached tmux session")
     r.add_argument("--cwd", default=os.getcwd())
-    r.add_argument("command", nargs=argparse.REMAINDER)
+    r.add_argument("command", nargs="*", help="after --")
     r.set_defaults(fn=cmd_run)
 
     f = sub.add_parser("freeze", help="save a process to disk")
