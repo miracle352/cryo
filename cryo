@@ -540,6 +540,9 @@ def cmd_watch(a):
                 ok, msg = freeze(m, leave_running=True)
                 froze_at[name] = time.monotonic()
                 burst[name] = 0
+                # criu runs code inside the process while dumping it; that CPU is
+                # ours, not the agent's, so don't let the next check count it as work
+                seen[name] = (tree_cpu(m["pid"]), seen[name][1])
                 if not ok:
                     print("cryo:", msg, flush=True)
         for _ in range(20):
