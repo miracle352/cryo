@@ -501,10 +501,16 @@ def cmd_watch(a):
             if prev is None or cpu - prev[0] > 1:        # ignore a stray tick
                 seen[name] = (cpu, t)
             quiet = t - seen[name][1] >= a.settle
-            dirty = m.get("cpu_at_freeze") is None or cpu - m["cpu_at_freeze"] > 3
+            base = m.get("cpu_at_freeze")
+            used = cpu - base if base is not None else 1 << 30
+            # an idle agent still ticks a little (timers, a blinking cursor); only a
+            # real burst of work (>= work_ticks) earns a snapshot right away, small
+            # drift gets folded in every `drift` seconds
+            worked = used >= a.work_ticks
+            drifted = used > 3 and t - froze_at.get(name, -1e9) >= a.drift
             has_image = os.path.isdir(os.path.join(agent_dir(name), "images"))
             stale = t - froze_at.get(name, -1e9) >= a.interval
-            if not has_image or (dirty and (quiet or stale)):
+            if not has_image or (worked and (quiet or stale)) or drifted:
                 ok, msg = freeze(m, leave_running=True)
                 froze_at[name] = time.monotonic()
                 if not ok:
@@ -596,6 +602,35 @@ def send_alert(subject, text):
     except Exception as e:  # never let an alert break freezing/thawing
         event("alert_failed", "*", error=str(e)[:200])
         return False
+
+
+def cmd_report(a):
+    """Let an agent mail you its work through the Resend connector."""
+    body = sys.stdin.read() if a.file == "-" else open(a.file).read() if a.file else a.text or ""
+    ok = send_alert(a.subject, body)
+    print("cryo: report sent" if ok else "cryo: report failed (run: cryo alerts --email you@example.com)")
+    sys.exit(0 if ok else 1)
+
+
+def cmd_say(a):
+    """Type a message into a tmux-managed agent, e.g. a prompt for Claude Code."""
+    m = load(a.name)
+    if not m.get("tmux"):
+        sys.exit(f"cryo: {a.name} isn't running in tmux")
+    sock = f"cryo-{a.name}"
+    subprocess.run(["tmux", "-L", sock, "send-keys", "-t", a.name, "-l", a.text], check=True)
+    time.sleep(0.3)
+    subprocess.run(["tmux", "-L", sock, "send-keys", "-t", a.name, "Enter"], check=True)
+    event("say", a.name, chars=len(a.text))
+
+
+def cmd_peek(a):
+    """Print what a tmux-managed agent's screen shows right now."""
+    m = load(a.name)
+    r = subprocess.run(["tmux", "-L", f"cryo-{a.name}", "capture-pane", "-p", "-t", a.name],
+                       capture_output=True, text=True)
+    lines = [l for l in r.stdout.splitlines() if l.strip()]
+    print("\n".join(lines[-a.n:]))
 
 
 def cmd_alerts(a):
@@ -852,6 +887,8 @@ def main():
     w = sub.add_parser("watch", help="snapshot continuously and thaw after restarts")
     w.add_argument("--interval", type=int, default=60)
     w.add_argument("--settle", type=int, default=5)
+    w.add_argument("--work-ticks", type=int, default=30, help="CPU ticks (1/100 s) that count as real work")
+    w.add_argument("--drift", type=int, default=900, help="fold in small idle changes this often (s)")
     w.set_defaults(fn=cmd_watch)
 
     s = sub.add_parser("stop", help="stop a process and stop managing it")
@@ -874,6 +911,22 @@ def main():
     al.add_argument("--gateway", help="Resend gateway URL from the connector page (auto-detected if omitted)")
     al.add_argument("--test", action="store_true", help="send a test email")
     al.set_defaults(fn=cmd_alerts)
+
+    rp = sub.add_parser("report", help="email a report through the Resend connector")
+    rp.add_argument("--subject", required=True)
+    rp.add_argument("--file", help="file to send, or - for stdin")
+    rp.add_argument("--text")
+    rp.set_defaults(fn=cmd_report)
+
+    sy = sub.add_parser("say", help="type a message into a tmux agent")
+    sy.add_argument("name")
+    sy.add_argument("text")
+    sy.set_defaults(fn=cmd_say)
+
+    pk = sub.add_parser("peek", help="show a tmux agent's screen")
+    pk.add_argument("name")
+    pk.add_argument("-n", type=int, default=25)
+    pk.set_defaults(fn=cmd_peek)
 
     ev = sub.add_parser("events", help="show the last events")
     ev.add_argument("-n", type=int, default=20)
