@@ -175,6 +175,16 @@ def cmd_run(a):
     print(f"cryo: {name} running as pid {pid}")
 
 
+def irmap_paths(meta):
+    paths = [meta.get("cwd"), os.environ.get("HOME"), "/home", "/root", "/tmp", "/etc"]
+    seen, out = set(), []
+    for p in paths:
+        if p and os.path.isdir(p) and p not in seen:
+            seen.add(p)
+            out.append(p)
+    return out
+
+
 def freeze(meta, leave_running):
     name = meta["name"]
     d = agent_dir(name)
@@ -187,6 +197,12 @@ def freeze(meta, leave_running):
             "--tcp-established", "--file-locks", "--network-lock", "skip"]
     if meta.get("tmux"):
         args.append("--ext-unix-sk")
+    # File watchers (inotify) are normally dumped as kernel file handles, which
+    # needs CAP_DAC_READ_SEARCH. Sprites don't grant it, so make criu resolve
+    # watched paths by scanning instead (irmap). Point it at the likely places.
+    args.append("--force-irmap")
+    for path in irmap_paths(meta):
+        args += ["--irmap-scan-path", path]
     if leave_running:
         args.append("--leave-running")
     ok, dt, errs = criu(args, new)
