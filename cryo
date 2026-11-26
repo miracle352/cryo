@@ -678,7 +678,7 @@ def cmd_teleport(a):
     bundle = os.path.join(out, f"{a.name}.tgz")
     manifest = {"name": a.name, "meta": m, "files": files, "dirs": dirs, "pids": pids,
                 "from_sprite": sprite_name(), "from_url": url, "email": load_config().get("email"),
-                "packed_at": now()}
+                "packed_at": now(), "monotonic": time.monotonic()}
     with tarfile.open(bundle, "w:gz", compresslevel=1) as tar:
         data = json.dumps(manifest, indent=2).encode()
         info = tarfile.TarInfo("manifest.json")
@@ -751,6 +751,17 @@ def cmd_import(a):
         problems = []
         if os.path.exists(os.path.join(agent_dir(name), "meta.json")) and alive(load(name).get("pid")):
             problems.append(f"an agent called {name} is already running here")
+        # programs time their timers with CLOCK_MONOTONIC, which counts from each Sprite's
+        # boot. Sprites can't give a process its own clock (no CAP_SYS_TIME, so no time
+        # namespace), so landing on a Sprite whose clock is behind leaves every timer in
+        # the agent waiting until this clock catches up. Ahead is fine: that's a pause.
+        if "monotonic" in man:
+            behind = man["monotonic"] + (now() - man["packed_at"]) - time.monotonic()
+            if behind > 5 and not a.force:
+                problems.append(
+                    f"this Sprite's clock is {behind / 3600:.1f}h behind {man['from_sprite']}'s; the agent's "
+                    f"timers would stall that long. Move agents toward the Sprite that has been up "
+                    f"longer (`cat /proc/uptime` on both), or --force")
         taken = [p for p in man["pids"] if os.path.exists(f"/proc/{p}")]
         if taken:
             problems.append(f"pids {taken[:5]} are already used here")
@@ -1314,6 +1325,7 @@ def main():
 
     im = sub.add_parser("import", help="receive an agent teleported from another Sprite")
     im.add_argument("url", help="the link `cryo teleport` printed")
+    im.add_argument("--force", action="store_true", help="land even if this Sprite's clock is behind")
     im.set_defaults(fn=cmd_import)
 
     l = sub.add_parser("ls", help="list managed processes")
