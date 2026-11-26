@@ -457,7 +457,7 @@ def cmd_freeze(a):
     targets = all_agents() if a.all else [load(a.name)]
     rc = 0
     for m in targets:
-        ok, msg = freeze(m, a.keep)
+        ok, msg = freeze(m, leave_running=not a.stop)
         print("cryo:", msg)
         rc |= not ok
     sys.exit(rc)
@@ -1270,6 +1270,59 @@ def cmd_install(a):
               f"(admin token: sudo cat {TOKEN_FILE})")
 
 
+def cmd_doctor(a):
+    """Why is something slow? Show where cryo's services and agents run (cgroup,
+    CPU/IO limits, PATH) and time a snapshot of the smallest agent from here."""
+    def cg(pid):
+        try:
+            with open(f"/proc/{pid}/cgroup") as f:
+                path = f.read().strip().split("::")[-1]
+        except OSError:
+            return "?", {}
+        lim = {}
+        for k in ("cpu.max", "cpu.weight", "io.max", "memory.max", "memory.high"):
+            try:
+                with open(f"/sys/fs/cgroup{path}/{k}") as f:
+                    v = f.read().strip().replace("\n", "; ")
+                    if v and v not in ("max", "max 100000", "100"):
+                        lim[k] = v
+            except OSError:
+                pass
+        return path, lim
+
+    def env_path(pid):
+        try:
+            with open(f"/proc/{pid}/environ", "rb") as f:
+                for kv in f.read().split(b"\0"):
+                    if kv.startswith(b"PATH="):
+                        return kv[5:].decode()
+        except OSError:
+            pass
+        return "?"
+
+    rows = [("this shell", os.getppid())]
+    for name, pat in (("cryo watch", "cryo watch"), ("cryo serve", "cryo serve")):
+        r = subprocess.run(["pgrep", "-f", pat], capture_output=True, text=True)
+        for pid in r.stdout.split()[:1]:
+            rows.append((name, int(pid)))
+    for m in all_agents():
+        if alive(m["pid"]):
+            rows.append((f"agent {m['name']}", m["pid"]))
+    for name, pid in rows:
+        path, lim = cg(pid)
+        print(f"{name:18} pid {pid:<8} cgroup {path}")
+        if lim:
+            print(f"{'':18} limits: " + ", ".join(f"{k}={v}" for k, v in lim.items()))
+        if name.startswith("cryo"):
+            p = env_path(pid)
+            print(f"{'':18} PATH {p}   crit: {'yes' if any(os.path.exists(os.path.join(d, 'crit')) for d in p.split(':')) else 'NOT FOUND'}")
+    live = [m for m in all_agents() if alive(m["pid"])]
+    if live:
+        m = min(live, key=lambda m: m.get("image_bytes") or 1 << 40)
+        ok, msg = freeze(m, leave_running=True)
+        print("test from here:", msg)
+
+
 def cmd_uninstall(a):
     subprocess.run(["sprite-env", "services", "delete", SERVICE])
     subprocess.run(["sprite-env", "services", "delete", API_SERVICE], capture_output=True)
@@ -1314,7 +1367,8 @@ def main():
     f = sub.add_parser("freeze", help="save a process to disk")
     f.add_argument("name", nargs="?")
     f.add_argument("--all", action="store_true")
-    f.add_argument("--keep", action="store_true", help="keep it running after the snapshot")
+    f.add_argument("--stop", action="store_true", help="stop it after the snapshot (default: keep it running)")
+    f.add_argument("--keep", action="store_true", help=argparse.SUPPRESS)  # the old default flag, now a no-op
     f.set_defaults(fn=cmd_freeze)
 
     t = sub.add_parser("thaw", help="bring a frozen process back")
@@ -1400,6 +1454,9 @@ def main():
     im.add_argument("url", help="the link `cryo teleport` printed")
     im.add_argument("--force", action="store_true", help="land even if this Sprite's clock is behind")
     im.set_defaults(fn=cmd_import)
+
+    dr = sub.add_parser("doctor", help="where services and agents run, and how fast a snapshot is")
+    dr.set_defaults(fn=cmd_doctor)
 
     l = sub.add_parser("ls", help="list managed processes")
     l.add_argument("--json", action="store_true")

@@ -64,7 +64,7 @@ sudo cryo alerts --email you@example.com --test
 | command | does |
 |---|---|
 | `cryo run NAME [--tmux] -- CMD` | start a process under cryo |
-| `cryo freeze NAME [--keep]` | dump it to disk (`--keep` leaves it running) |
+| `cryo freeze NAME [--stop]` | snapshot it to disk now (`--stop` also stops it) |
 | `cryo thaw NAME` | bring it back |
 | `cryo boot` | thaw everything that died in a restart |
 | `cryo watch` | freeze on activity, thaw anything that died |
