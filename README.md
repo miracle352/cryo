@@ -12,6 +12,8 @@ cryo keeps the agent alive anyway. It freezes the running process to disk with
 when the Sprite comes back: same memory, same terminal, same conversation, mid
 sentence. It emails you through the Sprites Resend connector when that
 happens, and the agent mails you its report the same way when it's done.
+Our own overnight agent audited cryo this way, survived a restart mid-audit,
+and [found bugs we then fixed](demo/AUDIT.md).
 
 It can also **move a live agent to another Sprite**: Claude Code, frozen on one
 machine, woke up on another and answered *"The codeword is TELEPORT-9. hostname
