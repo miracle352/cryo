@@ -692,7 +692,7 @@ def cmd_teleport(a):
     size = os.path.getsize(bundle)
     ticket = secrets.token_urlsafe(24)
     tickets = load_tickets()
-    tickets[ticket] = {"name": a.name, "bundle": bundle, "created": now(), "expires": now() + 1800,
+    tickets[ticket] = {"name": a.name, "bundle": bundle, "created": now(), "expires": now() + 7200,
                        "frozen_at": t0}
     save_tickets(tickets)
     m["status"] = "away"
@@ -710,7 +710,7 @@ def cmd_teleport(a):
             return
         print(f"cryo: that didn't work from here; run it on {a.to} yourself:", flush=True)
     else:
-        print("cryo: now run this on the other Sprite (the link lasts 30 minutes, until the agent lands):")
+        print("cryo: now run this on the other Sprite (the link lasts 2 hours, until the agent lands):")
     print(f"\n  sudo cryo import {pull}\n")
     print(f"cryo: changed your mind? `sudo cryo thaw {a.name}` here brings it back.")
 
@@ -1090,7 +1090,7 @@ def cmd_serve(a):
             tickets = load_tickets()
             t = tickets.get(ticket)
             if not t or now() > t["expires"] or not os.path.exists(t["bundle"]):
-                return self.send(404, {"error": "no such ticket (links last 30 minutes, until the agent lands)"})
+                return self.send(404, {"error": "no such ticket (links last 2 hours, until the agent lands)"})
             t["fetched"] = now()
             save_tickets(tickets)
             size = os.path.getsize(t["bundle"])

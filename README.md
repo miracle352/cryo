@@ -88,7 +88,7 @@ sudo cryo import https://cryo-lab-xxxx.sprites.app/api/bundle/<one-time link>
 ```
 
 The source does a last freeze, packs the images with every non-system file the
-agent had open or mapped, and hands out a link that works once for 30 minutes.
+agent had open or mapped, and hands out a link that lasts 2 hours or until the agent lands.
 The other Sprite pulls it, checks that the PIDs are free and that every program
 file it didn't carry is the same there, thaws it, and tells the source it landed.
 Nothing is deleted on the source until then: `cryo thaw cc` there calls it back.
