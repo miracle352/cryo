@@ -1,20 +1,27 @@
 # cryo
 
-**Agents on Sprites die. Ours don't.**
+**Your agent died at 3am. It didn't notice.**
 
-A Fly.io Sprite keeps its disk forever, but not its processes. A cold wake, a
-host move or a checkpoint restore kills everything that was running: your
-Claude Code session, the REPL you'd loaded data into, the dev server. Fly's
-own docs say to assume they're lost.
+Put Claude Code on a Fly.io Sprite, give it a night's work, and walk away.
+Sprites keep their disk forever but not their processes: a cold wake, a host
+move or a checkpoint restore kills everything that was running, and the agent
+forgets the whole session. Fly's own docs say to assume processes are lost.
 
-cryo freezes running processes to disk with [CRIU](https://criu.org) and thaws
-them after the Sprite comes back. Same memory, same terminal, same
-conversation.
+cryo keeps the agent alive anyway. It freezes the running process to disk with
+[CRIU](https://criu.org) whenever the agent has done some work, and thaws it
+when the Sprite comes back: same memory, same terminal, same conversation, mid
+sentence. It emails you through the Sprites Resend connector when that
+happens, and the agent mails you its report the same way when it's done.
 
-Live demo: **https://cryo-labs.vercel.app** (it reads a real Sprite; press
-"Restart cryo-lab" and watch the agents come back).
+It can also **move a live agent to another Sprite**: Claude Code, frozen on one
+machine, woke up on another and answered *"The codeword is TELEPORT-9. hostname
+returned cryo-lab"*.
 
-Built for Fly.io Hacksgiving 2026.
+**Try it:** https://cryo-labs.vercel.app. Leave a word in a process's memory,
+press *Kill our Sprite*, and watch every agent (and your word) come back.
+
+Built for Fly.io Hacksgiving 2026. Along the way we hit [seven walls on
+Sprites](#what-we-found-out-about-sprites) the docs don't mention.
 
 ## What it looks like
 
@@ -107,7 +114,7 @@ thaw) and answered "The codeword is TELEPORT-9. hostname returned cryo-lab".
 
 ## Try it without installing anything
 
-On [the site](https://cryo-labs.vercel.app), type a word into **Leave something
+On [the site](https://cryo-labs.vercel.app), type a word into **Leave a word
 in its memory**, then press **Kill our Sprite**. Your word is held by
 [`demo/keeper.py`](demo/keeper.py), a small program that keeps words in memory
 and never writes them to a file. Every process on the Sprite dies; when the page
