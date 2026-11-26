@@ -155,7 +155,7 @@ Also: there's no `iptables` on a Sprite, so cryo passes
 
 | workload | state kept | freeze | thaw |
 |---|---|---|---|
-| Claude Code in tmux | the conversation | 0.29–0.48 s | 0.17 s |
+| Claude Code in tmux | the conversation | paused 0.26 s (4 s to write 184 MB) | 0.17 s |
 | Node HTTP server | in-memory counter | 0.05 s | 0.04 s |
 | Python | 2,000,000 floats | | |
 | tmux + Python REPL | live variables | | |

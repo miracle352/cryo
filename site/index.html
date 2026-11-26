@@ -205,7 +205,7 @@ footer{padding:44px 32px;display:flex;justify-content:space-between;flex-wrap:wr
               <div class="ln" data-at=".07"><span class="a">● Got it. PINEAPPLE-42.</span></div>
               <div class="ln" data-at=".11"><span class="u">› And a second one: MANGO-7. Keep both.</span></div>
               <div class="ln" data-at=".15"><span class="a">● Noted, both are in memory.</span><span class="caret"></span></div>
-              <div class="ln" data-at=".19"><span class="s">  cryo: frozen to disk in 0.48s · 190 MB</span></div>
+              <div class="ln" data-at=".19"><span class="s">  cryo: saved to disk · Claude paused 0.26s · 190 MB</span></div>
               <div class="ln" data-at=".74"><span class="g">  cryo: thawed in 0.17s · same pid · same memory</span></div>
               <div class="ln" data-at=".79"><span class="u">› What were the two codewords?</span></div>
               <div class="ln" data-at=".85"><span class="a">● PINEAPPLE-42 and MANGO-7.</span></div>
@@ -382,11 +382,11 @@ const ago=t=>t?dur(Math.max(0,Date.now()/1000-t))+" ago":"never";
 const get=p=>fetch(API+p,{cache:"no-store"}).then(r=>{if(!r.ok)throw r.status;return r.json()});
 function renderAgents(st){const box=$("#agents");if(!st.agents.length){box.innerHTML='<div class="empty">no agents right now</div>';return}
   box.innerHTML=st.agents.map(a=>`<div class="ag" data-n="${esc(a.name)}"><div><div class="n">${esc(a.name)} ${a.status==="moved"?`<span class="pill mv">moved → ${esc(a.moved_to)}</span>`:a.status==="away"?`<span class="pill mv">teleporting</span>`:`<span class="pill ${a.alive?"run":"dead"}">${a.alive?"alive":"down"}</span>`}${a.came_from?` <span class="pill mv">from ${esc(a.came_from)}</span>`:""}</div>
-    <div class="m">${esc(a.program)} · ${a.image_bytes?(a.image_bytes/1e6).toFixed(0)+" MB":"—"} · frozen ${ago(a.last_freeze)}</div></div>
+    <div class="m">${esc(a.program)} · ${a.image_bytes?(a.image_bytes/1e6).toFixed(0)+" MB":"—"}${a.paused_seconds!=null?" · paused "+a.paused_seconds.toFixed(2)+"s":""} · frozen ${ago(a.last_freeze)}</div></div>
     <div class="x">${a.thaws}<small>deaths survived</small></div></div>`).join("");
   st.agents.forEach(a=>{if(lastF[a.name]&&lastF[a.name]!==a.last_freeze){const el=box.querySelector(`[data-n="${CSS.escape(a.name)}"]`);el&&el.classList.add("flash")}lastF[a.name]=a.last_freeze})}
 function evTxt(e){const s=e.seconds!=null?` in ${e.seconds}s`:"";switch(e.kind){
-  case"freeze":return`<b>${esc(e.agent)}</b> frozen${s}`;case"thaw":return`<b>${esc(e.agent)}</b> came back${s}`;
+  case"freeze":return`<b>${esc(e.agent)}</b> frozen${e.paused!=null?` (paused ${e.paused}s)`:s}`;case"thaw":return`<b>${esc(e.agent)}</b> came back${s}`;
   case"reboot_detected":return`<b>${esc(e.agent)}</b> died in a restart`;case"restart_requested":return`someone pressed <b>kill</b>`;
   case"alert":return`✉ ${esc(e.subject||"")}`;case"run":return`<b>${esc(e.agent)}</b> was born`;case"say":return`<b>${esc(e.agent)}</b> got a message`;
   case"install":return`cryo service installed`;case"teleport":return`<b>${esc(e.agent)}</b> packed for teleport`;

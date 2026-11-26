@@ -391,12 +391,30 @@ def freeze(meta, leave_running, status=None):
         os.rename(cur, old)
     os.rename(new, cur)
     shutil.rmtree(old, ignore_errors=True)
-    meta.update(last_freeze=now(), freeze_seconds=round(dt, 3), cpu_at_freeze=tree_cpu(meta["pid"]),
-                image_bytes=dir_size(cur), boot_id=boot_id(),
+    paused = paused_seconds(cur)
+    meta.update(last_freeze=now(), freeze_seconds=round(dt, 3), paused_seconds=paused,
+                cpu_at_freeze=tree_cpu(meta["pid"]), image_bytes=dir_size(cur), boot_id=boot_id(),
                 status=status or ("running" if leave_running else "frozen"))
     save(meta)
-    event("freeze", name, seconds=round(dt, 3), bytes=meta["image_bytes"], leave_running=leave_running)
-    return True, f"{name}: frozen in {dt:.2f}s ({meta['image_bytes'] / 1e6:.1f} MB)"
+    event("freeze", name, seconds=round(dt, 3), paused=paused, bytes=meta["image_bytes"],
+          leave_running=leave_running)
+    mb = meta["image_bytes"] / 1e6
+    if paused is not None and leave_running:
+        return True, f"{name}: frozen in {dt:.2f}s, the agent was paused for {paused:.2f}s ({mb:.1f} MB)"
+    return True, f"{name}: frozen in {dt:.2f}s ({mb:.1f} MB)"
+
+
+def paused_seconds(images):
+    """How long the process was actually stopped. With --leave-running it runs
+    again while criu is still writing pages to disk, so the dump's wall time
+    overstates it (on a Sprite the write is most of it: ~50 MB/s)."""
+    try:
+        r = subprocess.run(["crit", "show", os.path.join(images, "stats-dump")],
+                           capture_output=True, text=True, timeout=10)
+        d = json.loads(r.stdout)["entries"][0]["dump"]
+        return round((int(d["freezing_time"]) + int(d["frozen_time"])) / 1e6, 3)
+    except (OSError, ValueError, KeyError, IndexError, subprocess.SubprocessError):
+        return None
 
 
 def thaw(meta, extra=()):
@@ -995,6 +1013,7 @@ def public_agent(m):
         "pid": m["pid"], "alive": alive(m["pid"]), "status": m["status"],
         "started": m.get("started"), "last_freeze": m.get("last_freeze"),
         "freeze_seconds": m.get("freeze_seconds"), "image_bytes": m.get("image_bytes"),
+        "paused_seconds": m.get("paused_seconds"),
         "thaws": m.get("thaws", 0), "moved_to": m.get("moved_to"), "came_from": m.get("came_from"),
     }
 
