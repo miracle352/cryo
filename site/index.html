@@ -39,7 +39,8 @@ body::after{content:"";position:fixed;top:-50%;right:-50%;bottom:-50%;left:-50%;
   mask-image:radial-gradient(ellipse at 35% 50%,transparent var(--fr,100%),#000 calc(var(--fr,100%) + 24%));opacity:var(--fo,0)}
 #crystals,.cracks{position:absolute;top:0;right:0;bottom:0;left:0;width:100%;height:100%;pointer-events:none}
 #hbc{position:absolute;left:0;right:0;bottom:0;width:100%;height:120px;pointer-events:none}
-.cracks path{fill:none;stroke:#e6f7ff;stroke-width:1.4;stroke-linecap:round;filter:drop-shadow(0 0 6px rgba(143,216,255,.8))}
+.cracks{opacity:.6}
+.cracks path{fill:none;stroke:#e6f7ff;stroke-width:1;stroke-linecap:round;filter:drop-shadow(0 0 6px rgba(143,216,255,.8))}
 .flash{position:absolute;top:0;right:0;bottom:0;left:0;background:#fff;opacity:0;pointer-events:none;z-index:9}
 .shade{position:absolute;top:0;right:0;bottom:0;left:0;background:linear-gradient(90deg,rgba(8,8,8,.55),transparent 45%,rgba(8,8,8,.5));pointer-events:none}
 
@@ -64,8 +65,9 @@ h1 em{font-style:italic;color:var(--accent,var(--warm));transition:color .6s}
 .ln{opacity:0;transform:translateY(6px);transition:opacity .3s,transform .3s;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ln.on{opacity:1;transform:none}
 .u{color:var(--warm)}.a{color:var(--ink)}.s{color:var(--di)}.k{color:var(--ice)}.g{color:var(--green)}.r{color:var(--red)}
-.term.dead .body{animation:glitch .18s steps(2) infinite}.term.dead #replay .ln span{color:var(--red)}
-@keyframes glitch{0%{transform:translate(0)}25%{transform:translate(-3px,1px);filter:hue-rotate(90deg)}50%{transform:translate(2px,-2px)}75%{transform:translate(-1px,2px);clip-path:inset(20% 0 30% 0)}}
+.term.dead .body{animation:glitch .18s steps(2) 4}
+.term.livemode.dead .body{animation:none}.term.dead #replay .ln span{color:var(--red)}
+@keyframes glitch{0%{transform:translate(0)}25%{transform:translate(-3px,1px);filter:hue-rotate(90deg)}50%{transform:translate(2px,-2px)}75%{transform:translate(-1px,2px)}100%{transform:none}}
 .term.gone #replay .ln{opacity:0!important}
 #livebody{display:none}.term.livemode #replay{display:none}.term.livemode #livebody{display:block}
 .caret{display:inline-block;width:8px;height:15px;background:var(--ink);vertical-align:-2px;animation:blink 1s steps(1) infinite}
@@ -191,7 +193,7 @@ footer{padding:44px 32px;display:flex;justify-content:space-between;flex-wrap:wr
   <div class="frost" id="frost"></div>
   <canvas id="crystals"></canvas>
   <canvas id="hbc"></canvas>
-  <svg class="cracks" id="cracks" viewBox="0 0 1000 1000" preserveAspectRatio="none"></svg>
+  <svg class="cracks" id="cracks" viewBox="0 0 1000 1000" preserveAspectRatio="xMidYMid slice"></svg>
   <div class="shade"></div>
   <div class="flash" id="flash"></div>
 
@@ -319,7 +321,7 @@ const order=cells.map((c,i)=>i).sort(()=>Math.random()-.5);
 
 /* cracks from an impact point near the terminal */
 const svg=$("#cracks"),cracks=[];
-(function(){const ox=340,oy=540;for(let k=0;k<14;k++){let a=k/14*Math.PI*2+Math.random()*.3,x=ox,y=oy,d=`M${ox} ${oy}`;const len=180+Math.random()*460;
+(function(){const ox=320,oy=520;for(let k=0;k<10;k++){let a=k/10*Math.PI*2+Math.random()*.4,x=ox,y=oy,d=`M${ox} ${oy}`;const len=140+Math.random()*340;
   for(let s=0;s<len;s+=24){a+=(Math.random()-.5)*.6;x+=Math.cos(a)*24;y+=Math.sin(a)*24;d+=` L${x.toFixed(1)} ${y.toFixed(1)}`;
     if(Math.random()<.12){let bx=x,by=y,ba=a+(Math.random()<.5?.9:-.9),bd=`M${bx} ${by}`;for(let t=0;t<5;t++){bx+=Math.cos(ba)*18;by+=Math.sin(ba)*18;bd+=` L${bx.toFixed(1)} ${by.toFixed(1)}`}
       const p=document.createElementNS("http://www.w3.org/2000/svg","path");p.setAttribute("d",bd);svg.appendChild(p);cracks.push(p)}}
@@ -368,7 +370,7 @@ function render(p){
   const T=$("#temp");T.textContent=isNaN(temp)?"—":(temp>=0?temp.toFixed(1):temp.toFixed(0))+"°C";T.style.color=isNaN(temp)?"#ff4d4d":temp<0?"#8fd8ff":temp<20?"#d8f3ff":"#ffb067";
   const S=$("#state");S.textContent=state;S.style.color=T.style.color;
   $("#memv").textContent=state==="dead"?"0 MB · lost":state==="frozen"?"190 MB on disk":"190 MB in RAM";
-  const fr=p<CH[1]?0:p<CH[2]?seg(p,CH[1],CH[2])*.5:p<CH[3]?.5:p<CH[4]?lerp(.5,1,seg(p,CH[3],CH[3]+.1)):lerp(1,0,seg(p,CH[4],CH[4]+.1));
+  const fr=p<CH[1]?0:p<CH[2]?seg(p,CH[1],CH[2])*.3:p<CH[3]?lerp(.3,.12,seg(p,CH[2],CH[2]+.03)):p<CH[4]?lerp(.12,1,seg(p,CH[3],CH[3]+.1)):lerp(1,0,seg(p,CH[4],CH[4]+.1));
   $("#frost").style.setProperty("--fo",(fr*.95).toFixed(3));$("#frost").style.setProperty("--fr",lerp(100,-10,fr).toFixed(1)+"%");drawCrystals(fr);
   const ck=p<.395?0:p<CH[3]?seg(p,.395,.43):p<CH[4]?1-seg(p,CH[3],CH[3]+.05)*.75:.25*(1-seg(p,CH[4],CH[4]+.05));
   cracks.forEach(c=>c.style.strokeDashoffset=(c._L*(1-ck)).toFixed(1));
