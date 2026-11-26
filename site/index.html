@@ -99,10 +99,11 @@ h1 em{font-style:italic;color:var(--accent,var(--warm));transition:color .6s}
 .dot{display:inline-flex;align-items:center;gap:8px}.dot i{width:7px;height:7px;border-radius:50%;background:var(--di)}
 .dot.on i{background:var(--green);animation:lp 2s infinite}.dot.off i{background:var(--red)}
 @keyframes lp{0%{box-shadow:0 0 0 0 rgba(92,240,168,.6)}70%{box-shadow:0 0 0 8px rgba(92,240,168,0)}}
-.ag{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;padding:14px 18px;border-bottom:1px solid rgba(255,255,255,.05);position:relative;overflow:hidden}
+#agents{height:232px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#333 transparent}
+.ag{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;padding:10px 18px;border-bottom:1px solid rgba(255,255,255,.05);position:relative;overflow:hidden}
 .ag .n{font:600 15px Inter;display:flex;gap:10px;align-items:center}
-.ag .m{font:11px var(--mono);color:var(--di);margin-top:2px}
-.ag .x{text-align:right;font:400 28px var(--serif);font-style:italic;color:var(--ice);line-height:1}
+.ag .m{font:11px var(--mono);color:var(--di);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:300px}
+.ag .x{text-align:right;font:400 24px var(--serif);font-style:italic;color:var(--ice);line-height:1}
 .ag .x small{display:block;font:500 9px var(--mono);font-style:normal;color:var(--di);letter-spacing:.08em;text-transform:uppercase;margin-top:4px}
 .pill{font:500 9px var(--mono);letter-spacing:.08em;padding:3px 7px;border-radius:999px;text-transform:uppercase}
 .pill.mv{background:rgba(143,216,255,.1);color:var(--ice)}.pill.run{background:rgba(92,240,168,.1);color:var(--green)}.pill.dead{background:rgba(255,77,77,.12);color:var(--red)}
@@ -122,7 +123,7 @@ h1 em{font-style:italic;color:var(--accent,var(--warm));transition:color .6s}
 #win:focus{border-color:var(--ice);box-shadow:0 0 0 3px rgba(143,216,255,.15)}
 #wform button{all:unset;cursor:pointer;padding:0 16px;border-radius:10px;background:var(--ice);color:#04121c;font:700 13px Inter;transition:transform .15s}
 #wform button:hover{transform:translateY(-1px)}#wform button[disabled]{opacity:.5;cursor:default}
-.wnote{margin-top:9px;font:11.5px/1.5 var(--mono);color:var(--di);min-height:34px}
+.wnote{margin-top:9px;font:11.5px/1.5 var(--mono);color:var(--di);height:34px;overflow:hidden}
 .wnote q{color:var(--ink)}.wnote.ok{color:var(--mu)}.wnote.back{color:var(--green)}.wnote.back q{color:#d8ffe9}.wnote.gone{color:var(--red)}
 .memo.glow{animation:mglow 1.6s}@keyframes mglow{0%{box-shadow:inset 0 0 0 2px rgba(92,240,168,.9)}100%{box-shadow:inset 0 0 0 2px rgba(92,240,168,0)}}
 .killbox{padding:18px;border-top:1px solid rgba(255,77,77,.2);background:radial-gradient(100% 160% at 50% 120%,rgba(255,77,77,.16),transparent 70%)}
@@ -415,9 +416,10 @@ function renderEvents(evs){const rows=[];for(let i=evs.length-1;i>=0&&rows.lengt
   if(nw&&restarting)logLive(evTxt(e),e.kind==="thaw"?"g":e.kind==="reboot_detected"?"r":"k");
   rows.push(`<div class="ev ${esc(e.kind)}${nw?" new":""}"><span class="tm">${new Date(e.t*1000).toLocaleTimeString([],{hour12:false,hour:"2-digit",minute:"2-digit",second:"2-digit"})}</span><span>${evTxt(e)}</span></div>`)}
   $("#evs").innerHTML=rows.join("")||'<div class="empty">nothing yet</div>';$("#evn").textContent=evs.length+" events";first=false}
-let busy=false;
+let busy=false,fitted=false;
 async function poll(){if(busy)return;busy=true;try{const[st,evs]=await Promise.all([get("/api/state"),get("/api/events")]);renderAgents(st);renderEvents(evs);
-  const c=$("#conn");c.className="dot on";c.lastElementChild.textContent="live";if(restarting)prog(st);lastEnv=st.environment}
+  const c=$("#conn");c.className="dot on";c.lastElementChild.textContent="live";if(restarting)prog(st);lastEnv=st.environment;
+  if(!fitted){fitted=true;fit()}}
   catch(e){const c=$("#conn");c.className="dot off";c.lastElementChild.textContent=restarting?"dying…":"asleep";if(restarting)prog(null)}
   finally{busy=false}}
 poll();setInterval(()=>{if(!restarting)poll()},2500);setInterval(()=>{if(restarting)poll()},1200);
