@@ -2,6 +2,8 @@
 
 **Kill the machine. Keep the mind.**
 
+[![Watch the demo, 1:16](docs/demo.jpg)](https://cryo-labs.vercel.app/demo.mp4)
+
 Put Claude Code on a Fly.io Sprite, give it a night's work, and walk away.
 Sprites keep their disk forever but not their processes: a cold wake, a host
 move or a checkpoint restore kills everything that was running, and the agent
@@ -150,6 +152,7 @@ The images live on the Sprite's disk, so a Sprite checkpoint carries them too.
 ## What we found out about Sprites
 
 Tested on kernel `6.12.87-fly`, CRIU 4.2 from Ubuntu.
+Discussion on the Fly.io forum: [Freezing running agents on Sprites with CRIU](https://community.fly.io/t/freezing-running-agents-on-sprites-with-criu-7-things-the-docs-dont-mention/29179).
 
 1. **No CAP_SYS_PTRACE.** Root can't ptrace processes owned by the `sprite`
    user, so CRIU can't freeze them. cryo runs agents as root.
