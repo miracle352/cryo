@@ -1527,7 +1527,9 @@ def cmd_doctor(a):
             print(f"{'':18} limits: " + ", ".join(f"{k}={v}" for k, v in lim.items()))
         if name.startswith("cryo"):
             p = env_path(pid)
-            print(f"{'':18} PATH {p}   crit: {'yes' if any(os.path.exists(os.path.join(d, 'crit')) for d in p.split(':')) else 'NOT FOUND'}")
+            dirs = [d for d in p.split(":") if d and d != "?"] + ["/usr/bin", "/usr/sbin", "/usr/local/bin"]
+            found = next((os.path.join(d, "crit") for d in dirs if os.path.exists(os.path.join(d, "crit"))), None)
+            print(f"{'':18} PATH {p}   crit: {found or 'NOT FOUND'}")
     live = [m for m in all_agents() if agent_alive(m)]
     if live:
         m = min(live, key=lambda m: m.get("image_bytes") or 1 << 40)
