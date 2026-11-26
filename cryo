@@ -1085,6 +1085,8 @@ def cmd_serve(a):
         subprocess.Popen(["sprite", "restore", "-s", name, mm.group(1)],
                          stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
 
+    recent = []   # times of recent public word saves
+
     class H(BaseHTTPRequestHandler):
         def log_message(self, *args):
             pass
@@ -1123,7 +1125,24 @@ def cmd_serve(a):
                 return self.send(200, {"ok": True})
             if path.startswith("/api/bundle/"):
                 return self.bundle(path.rsplit("/", 1)[-1])
+            if path == "/api/words" or path.startswith("/api/words/"):
+                return self.keeper("GET", path[len("/api"):])
             self.send(404, {"error": "not found"})
+
+        def keeper(self, method, path, body=None):
+            """Pass a visitor's word to keeper (demo/keeper.py), a process that holds
+            words only in memory. It listens on localhost; this is its only door."""
+            import urllib.error
+            import urllib.request
+            req = urllib.request.Request(f"http://127.0.0.1:{a.keeper_port}{path}", data=body, method=method,
+                                         headers={"Content-Type": "application/json"})
+            try:
+                with urllib.request.urlopen(req, timeout=5) as r:
+                    return self.send(r.status, r.read())
+            except urllib.error.HTTPError as e:
+                return self.send(e.code, e.read())
+            except OSError:
+                return self.send(503, {"error": "keeper isn't answering (restarting?)"})
 
         def bundle(self, ticket):
             # only `cryo import` may take it: a browser, a link preview or a stray click
@@ -1149,6 +1168,14 @@ def cmd_serve(a):
             path = self.path.split("?")[0]
             if path.startswith("/api/landed/"):
                 return self.landed(path.rsplit("/", 1)[-1])
+            if path == "/api/words":
+                # anyone may leave a word; keep it to a trickle
+                recent[:] = [t for t in recent if now() - t < 60]
+                if len(recent) >= 30:
+                    return self.send(429, {"error": "lots of people are doing this; try again in a minute"})
+                recent.append(now())
+                n = min(int(self.headers.get("Content-Length") or 0), 2048)
+                return self.keeper("POST", "/words", self.rfile.read(n))
             public_ok = path == "/api/restart" and a.public_restart
             if not (self.authed() or public_ok):
                 return self.send(401, {"error": "unauthorized"})
@@ -1358,6 +1385,7 @@ def main():
     sv.add_argument("--public-restart", action="store_true",
                     help="let anyone press the restart button (rate limited)")
     sv.add_argument("--restart-cooldown", type=int, default=180)
+    sv.add_argument("--keeper-port", type=int, default=8091)
     sv.set_defaults(fn=cmd_serve)
 
     tp = sub.add_parser("teleport", help="move a running agent to another Sprite")

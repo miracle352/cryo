@@ -105,6 +105,20 @@ login against the machine it's on.
 Tested: Claude Code moved from cryo-lab-2 to cryo-lab (49.8 MB bundle, 0.34 s
 thaw) and answered "The codeword is TELEPORT-9. hostname returned cryo-lab".
 
+## Try it without installing anything
+
+On [the site](https://cryo-labs.vercel.app), type a word into **Leave something
+in its memory**, then press **Kill our Sprite**. Your word is held by
+[`demo/keeper.py`](demo/keeper.py), a small program that keeps words in memory
+and never writes them to a file. Every process on the Sprite dies; when the page
+says everything came back, it reads your word back from the same process.
+
+To run keeper on your own Sprite:
+
+```sh
+sudo cryo run keeper -- python3 ~/cryo/demo/keeper.py
+```
+
 ## How it works
 
 1. **Run.** cryo starts the agent as root inside a small seccomp filter that

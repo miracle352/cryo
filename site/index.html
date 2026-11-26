@@ -106,12 +106,23 @@ h1 em{font-style:italic;color:var(--accent,var(--warm));transition:color .6s}
 .pill.mv{background:rgba(143,216,255,.1);color:var(--ice)}.pill.run{background:rgba(92,240,168,.1);color:var(--green)}.pill.dead{background:rgba(255,77,77,.12);color:var(--red)}
 .ag.flash::after{content:"";position:absolute;top:0;right:0;bottom:0;left:0;background:linear-gradient(100deg,transparent 20%,rgba(143,216,255,.18) 50%,transparent 80%);animation:sw 1.2s}
 @keyframes sw{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
-.evs{height:150px;overflow:hidden;padding:8px 18px;-webkit-mask-image:linear-gradient(#000 60%,transparent);mask-image:linear-gradient(#000 60%,transparent)}
+.evs{height:110px;overflow:hidden;padding:8px 18px;-webkit-mask-image:linear-gradient(#000 60%,transparent);mask-image:linear-gradient(#000 60%,transparent)}
 .ev{display:grid;grid-template-columns:58px 1fr;gap:8px;font:11.5px/1.5 var(--mono);color:var(--mu);padding:4px 0}
 .ev .tm{color:var(--di)}.ev b{color:var(--ink);font-weight:500}
 .ev.thaw span:last-child{color:var(--green)}.ev.reboot_detected span:last-child{color:var(--red)}
 .ev.new{animation:evn .7s}@keyframes evn{from{opacity:0;transform:translateX(-10px)}}
 .empty{padding:22px;text-align:center;color:var(--di);font:12px var(--mono)}
+.memo{padding:16px 18px;border-top:1px solid rgba(255,255,255,.06);background:radial-gradient(120% 140% at 0% 0%,rgba(143,216,255,.07),transparent 60%)}
+.memo .lbl,.killbox .lbl{font:500 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--mu);margin-bottom:10px;display:flex;justify-content:space-between}
+.memo .lbl b{color:var(--ice);font-weight:500}
+#wform{display:flex;gap:8px}
+#win{flex:1;min-width:0;background:#060708;border:1px solid rgba(143,216,255,.25);border-radius:10px;padding:11px 12px;color:var(--ink);font:14px var(--mono);outline:none;transition:border-color .2s,box-shadow .2s}
+#win:focus{border-color:var(--ice);box-shadow:0 0 0 3px rgba(143,216,255,.15)}
+#wform button{all:unset;cursor:pointer;padding:0 16px;border-radius:10px;background:var(--ice);color:#04121c;font:700 13px Inter;transition:transform .15s}
+#wform button:hover{transform:translateY(-1px)}#wform button[disabled]{opacity:.5;cursor:default}
+.wnote{margin-top:9px;font:11.5px/1.5 var(--mono);color:var(--di);min-height:34px}
+.wnote q{color:var(--ink)}.wnote.ok{color:var(--mu)}.wnote.back{color:var(--green)}.wnote.back q{color:#d8ffe9}.wnote.gone{color:var(--red)}
+.memo.glow{animation:mglow 1.6s}@keyframes mglow{0%{box-shadow:inset 0 0 0 2px rgba(92,240,168,.9)}100%{box-shadow:inset 0 0 0 2px rgba(92,240,168,0)}}
 .killbox{padding:18px;border-top:1px solid rgba(255,77,77,.2);background:radial-gradient(100% 160% at 50% 120%,rgba(255,77,77,.16),transparent 70%)}
 .kill{all:unset;box-sizing:border-box;cursor:pointer;width:100%;display:flex;justify-content:center;align-items:center;gap:12px;padding:17px;border-radius:14px;background:var(--red);color:#1a0505;font:700 15px Inter;box-shadow:0 14px 50px -12px rgba(255,77,77,.9);transition:transform .15s,box-shadow .3s}
 .kill:hover{transform:translateY(-1px) scale(1.01);box-shadow:0 18px 60px -10px rgba(255,77,77,1)}
@@ -240,7 +251,13 @@ footer{padding:44px 32px;display:flex;justify-content:space-between;flex-wrap:wr
       <div id="agents"><div class="empty">waking the Sprite…</div></div>
       <div class="ch" style="border-top:1px solid rgba(255,255,255,.06)"><span>What happened</span><span id="evn">—</span></div>
       <div class="evs" id="evs"></div>
+      <div class="memo" id="memo">
+        <div class="lbl"><span>1 · Leave something in its memory</span><b id="kpid"></b></div>
+        <form id="wform" autocomplete="off"><input id="win" maxlength="40" placeholder="your name, a word, anything"><button id="wbtn">Keep it</button></form>
+        <div class="wnote" id="wnote">It goes into one process's RAM. That program never writes it to a file.</div>
+      </div>
       <div class="killbox">
+        <div class="lbl"><span>2 · Then kill the machine</span></div>
         <button class="kill" id="killBtn"><i></i>Kill our Sprite</button>
         <div class="note" id="killNote">Every process dies. Watch the story happen for real.</div>
       </div>
@@ -416,7 +433,8 @@ function prog(st){
     else back()}
   const here=st.agents.filter(a=>!["moved","away","stopped"].includes(a.status));
   if(phase==="back"&&here.length&&here.every(a=>a.alive)){phase="done";liveTarget=.9;
-    logLive(`all ${here.length} agents came back. nothing was lost.`,"g");setCaption(4,`They all came back in <em>${el()}</em>. Nothing was lost.`);
+    logLive(`all ${here.length} agents came back. nothing was lost.`,"g");
+    if(wid)checkWord(true);setCaption(4,`They all came back in <em>${el()}</em>. Nothing was lost.`);
     $("#realtxt").textContent=`That was real. You killed cryo-lab and every agent came back in ${el()}.`;setTimeout(endLive,9000)}}
 function endLive(){restarting=false;mode="replay";$("#liveTag").classList.remove("on");term.classList.remove("livemode");$("#tname").textContent="claude · tmux · cryo-lab";
   caps.forEach((c,i)=>c.innerHTML=ORIG[i]);$("#killBtn").disabled=false;t0=performance.now();
@@ -433,6 +451,30 @@ $("#killBtn").onclick=async()=>{const h={"Content-Type":"application/json"};if(t
   logLive("you pressed kill. freezing every agent, then checkpoint + restore…","u");
   $("#realtxt").textContent="This is live. Nothing here is a replay now.";
   scrollTo({top:0,behavior:"smooth"})};
+
+/* ---------- leave something in its memory ---------- */
+let wid=null;try{wid=localStorage.getItem("cryo_word")}catch(e){}
+const wnote=$("#wnote"),fmtT=t=>new Date(t*1000).toLocaleTimeString([],{hour:"2-digit",minute:"2-digit"});
+function setNote(cls,html){wnote.className="wnote "+cls;wnote.innerHTML=html}
+async function checkWord(afterKill){
+  try{const r=await fetch(API+"/api/words/"+encodeURIComponent(wid),{cache:"no-store"});const j=await r.json();
+    if(j.pid)$("#kpid").textContent="keeper · pid "+j.pid;
+    if(r.ok){
+      if(afterKill){setNote("back",`It came back: <q>${esc(j.text)}</q><br>same process, pid ${j.pid}, after every process on the machine died.`);
+        $("#memo").classList.remove("glow");void $("#memo").offsetWidth;$("#memo").classList.add("glow");
+        logLive(`your word came back from memory: “${esc(j.text)}”`,"g");setCaption(4,`Back in ${el()}, and so is your word <em>“${esc(j.text)}”</em>.`)}
+      else setNote("ok",`Still in memory: <q>${esc(j.text)}</q> (pid ${j.pid}, held since ${fmtT(j.t)}). Kill the Sprite and see.`)}
+    else if(r.status===404)setNote(afterKill?"gone":"",afterKill?"Your word didn't come back. Tell us, that's a bug.":"It goes into one process's RAM. That program never writes it to a file.")
+  }catch(e){}}
+if(wid)setTimeout(()=>checkWord(false),800);
+fetch(API+"/api/words",{cache:"no-store"}).then(r=>r.json()).then(j=>{if(j.pid)$("#kpid").textContent="keeper · pid "+j.pid}).catch(()=>{});
+$("#wform").onsubmit=async e=>{e.preventDefault();const text=$("#win").value.trim();if(!text)return;$("#wbtn").disabled=true;
+  try{const r=await fetch(API+"/api/words",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text})});const j=await r.json();
+    if(!r.ok){setNote("gone",esc(j.error||"couldn't keep it"));return}
+    wid=j.id;try{localStorage.setItem("cryo_word",wid)}catch(e){}
+    $("#kpid").textContent="keeper · pid "+j.pid;$("#win").value="";
+    setNote("ok",`Kept in memory by pid ${j.pid}: <q>${esc(j.text)}</q><br>Nothing saved it to a file. Now kill the machine ↓`)}
+  catch(e){setNote("gone","couldn't reach the Sprite")}finally{$("#wbtn").disabled=false}};
 
 /* ---------- the page freezes while you're away ---------- */
 let hiddenAt=0;const T0=document.title;
