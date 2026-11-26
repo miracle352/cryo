@@ -164,6 +164,8 @@ Tested on kernel `6.12.87-fly`, CRIU 4.2 from Ubuntu.
    filter avoids it.
 5. **`boot_id` survives a checkpoint restore.** A restore restarts the
    container, not the kernel. cryo pairs `boot_id` with PID 1's start time.
+   We have also seen PID 1's start time change while agents kept running, so
+   cryo recognises each agent by its own process start time, not by PID alone.
 6. **Timers count awake time.** A paused Sprite freezes every process, so a
    60 s timer can take much longer on the wall clock. cryo snapshots on
    activity instead.

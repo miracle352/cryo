@@ -456,7 +456,7 @@ function renderAgents(st){st={...st,agents:st.agents.filter(a=>!["moved","stoppe
     <div class="x">${a.thaws}<small>deaths survived</small></div></div>`).join("");
   st.agents.forEach(a=>{if(lastF[a.name]&&lastF[a.name]!==a.last_freeze){const el=box.querySelector(`[data-n="${CSS.escape(a.name)}"]`);el&&el.classList.add("flash")}lastF[a.name]=a.last_freeze})}
 function evTxt(e){const s=e.seconds!=null?` in ${e.seconds}s`:"";switch(e.kind){
-  case"freeze":return`<b>${esc(e.agent)}</b> snapshot saved${e.paused!=null?` (paused ${e.paused}s)`:""}`;case"thaw":return`<b>${esc(e.agent)}</b> came back${s}`;
+  case"freeze":return`<b>${esc(e.agent)}</b> snapshot saved${e.paused!=null&&e.paused<5?` (paused ${e.paused}s)`:""}`;case"thaw":return`<b>${esc(e.agent)}</b> came back${s}`;
   case"reboot_detected":return`<b>${esc(e.agent)}</b> died in a restart`;case"restart_requested":return`someone pressed <b>kill</b>`;
   case"alert":return`✉ ${esc(e.subject||"")}`;case"alert_skipped":return`✉ email skipped (${esc(e.reason||"")})`;case"run":return`<b>${esc(e.agent)}</b> was born`;case"say":return`<b>${esc(e.agent)}</b> got a message`;
   case"install":return`cryo service installed`;case"teleport":return`<b>${esc(e.agent)}</b> packed for teleport`;

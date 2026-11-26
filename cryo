@@ -200,10 +200,27 @@ def alive(pid):
         return False
 
 
+def proc_start(pid):
+    """When a process started (clock ticks since boot): with the PID, it names
+    one process for good. A reused PID gets a different start time."""
+    try:
+        with open(f"/proc/{pid}/stat") as f:
+            return int(f.read().split(") ", 1)[1].split()[19])
+    except (OSError, IndexError, ValueError):
+        return None
+
+
 def agent_alive(m):
-    """The agent's process is running. A PID alone isn't enough: after a restart
-    a boot process can get the same PID, so it must also be from this boot."""
-    return alive(m.get("pid")) and m.get("boot_id") == boot_id()
+    """The agent's own process is running. A PID alone isn't enough: after a
+    restart a boot process can get the same PID. Compare the process's start
+    time with the one recorded when cryo started or thawed it. (Not the
+    environment id: we've seen a Sprite change PID 1 under running agents.)"""
+    pid = m.get("pid")
+    if not alive(pid):
+        return False
+    if m.get("pid_start") is not None:
+        return proc_start(pid) == m["pid_start"]
+    return True   # recorded before cryo kept start times; filled in at its next freeze
 
 
 def images_dir(d):
@@ -338,7 +355,7 @@ def cmd_run(a):
 
     meta = {
         "name": name, "command": command, "cwd": a.cwd, "tmux": a.tmux,
-        "pid": pid, "status": "running", "started": now(), "boot_id": boot_id(),
+        "pid": pid, "pid_start": proc_start(pid), "status": "running", "started": now(), "boot_id": boot_id(),
         "last_freeze": None, "freeze_seconds": None, "image_bytes": None,
         "thaws": 0,
     }
@@ -511,6 +528,7 @@ def _freeze(meta, leave_running, status):
     paused = paused_seconds(cur)
     meta.update(last_freeze=now(), freeze_seconds=round(dt, 3), paused_seconds=paused,
                 cpu_at_freeze=tree_cpu(meta["pid"]), image_bytes=dir_size(cur), boot_id=boot_id(),
+                pid_start=meta.get("pid_start") or proc_start(meta["pid"]),
                 mono_at_freeze=time.monotonic(),
                 status=status or ("running" if leave_running else "frozen"))
     save(meta)
@@ -577,7 +595,8 @@ def _thaw(meta, extra=()):
     # in the agent then waits until it catches up. Say so instead of staying silent.
     behind = (meta.get("mono_at_freeze") or 0) - time.monotonic()
     # restored tasks start with fresh CPU counters; re-baseline the activity check
-    meta.update(pid=pid, status="running", boot_id=boot_id(), thaws=meta.get("thaws", 0) + 1,
+    meta.update(pid=pid, pid_start=proc_start(pid), status="running", boot_id=boot_id(),
+                thaws=meta.get("thaws", 0) + 1,
                 cpu_at_freeze=tree_cpu(pid), thaw_failures=0)
     save(meta)
     event("thaw", name, seconds=round(dt, 3), pid=pid, since_freeze=round(lost, 1),
@@ -1028,6 +1047,7 @@ def cmd_import(a):
                 os.replace(tmp, dest)   # rename, so a running copy of the file is left alone
 
     ticket = a.url.rstrip("/").rsplit("/", 1)[-1]
+    meta.pop("pid_start", None)   # the other Sprite's; thaw records ours
     meta.update(status="arriving", boot_id=boot_id(), came_from=man["from_sprite"],
                 landing={"url": man["from_url"], "ticket": ticket, "packed_at": man["packed_at"],
                          "email": man.get("email")})
