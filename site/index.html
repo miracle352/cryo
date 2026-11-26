@@ -47,7 +47,9 @@ body::after{content:"";position:fixed;top:-50%;right:-50%;bottom:-50%;left:-50%;
 .heroin{position:relative;z-index:5;flex:none;display:grid;grid-template-columns:780px 440px;gap:56px;align-items:center;width:1340px;padding:76px 32px 40px}
 @media (max-width:700px),(max-width:980px) and (orientation:portrait){.heroin{grid-template-columns:minmax(0,1fr);gap:32px;width:auto;padding:84px 20px 60px;zoom:1!important}}
 
-h1{font:400 76px/.98 var(--serif);letter-spacing:-.02em;margin-bottom:26px}
+h1{font:400 76px/.98 var(--serif);letter-spacing:-.02em;margin-bottom:16px}
+.sub{font:400 18px/1.5 Inter;color:var(--mu);max-width:640px;margin-bottom:24px}
+.sub b{color:var(--ink);font-weight:500}
 @media (max-width:700px),(max-width:980px) and (orientation:portrait){h1{font-size:clamp(40px,10vw,64px)}}
 h1 em{font-style:italic;color:var(--accent,var(--warm));transition:color .6s}
 
@@ -99,7 +101,7 @@ h1 em{font-style:italic;color:var(--accent,var(--warm));transition:color .6s}
 .dot{display:inline-flex;align-items:center;gap:8px}.dot i{width:7px;height:7px;border-radius:50%;background:var(--di)}
 .dot.on i{background:var(--green);animation:lp 2s infinite}.dot.off i{background:var(--red)}
 @keyframes lp{0%{box-shadow:0 0 0 0 rgba(92,240,168,.6)}70%{box-shadow:0 0 0 8px rgba(92,240,168,0)}}
-#agents{height:232px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#333 transparent}
+#agents{height:178px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#333 transparent}
 .ag{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;padding:10px 18px;border-bottom:1px solid rgba(255,255,255,.05);position:relative;overflow:hidden}
 .ag .n{font:600 15px Inter;display:flex;gap:10px;align-items:center}
 .ag .m{font:11px var(--mono);color:var(--di);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:300px}
@@ -204,6 +206,7 @@ footer{padding:44px 32px;display:flex;justify-content:space-between;flex-wrap:wr
   <div class="heroin">
     <div>
       <h1 id="h1">Your agent died at 3am.<br><em>It didn't notice.</em></h1>
+      <p class="sub"><b>Cryo</b> freezes running agents on Fly.io Sprites to disk and brings them back after the Sprite restarts, <b>or on another Sprite</b>. Same memory, same conversation.</p>
       <div class="screen">
         <div class="hudrow">
           <div>Core temp<b id="temp">37.0°C</b></div>
@@ -400,22 +403,23 @@ let token=null;try{token=new URLSearchParams(location.search).get("token")||sess
 let lastEnv=null,seen=new Set(),first=true,lastF={},restarting=false,rStart=0,envBefore=null,sawDown=false,liveLog=[],phase="";
 const ago=t=>t?dur(Math.max(0,Date.now()/1000-t))+" ago":"never";
 const get=p=>fetch(API+p,{cache:"no-store"}).then(r=>{if(!r.ok)throw r.status;return r.json()});
-function renderAgents(st){const box=$("#agents");if(!st.agents.length){box.innerHTML='<div class="empty">no agents right now</div>';return}
-  box.innerHTML=st.agents.map(a=>`<div class="ag" data-n="${esc(a.name)}"><div><div class="n">${esc(a.name)} ${a.status==="moved"?`<span class="pill mv">moved → ${esc(a.moved_to)}</span>`:a.status==="away"?`<span class="pill mv">teleporting</span>`:`<span class="pill ${a.alive?"run":"dead"}">${a.alive?"alive":"down"}</span>`}${a.came_from?` <span class="pill mv">from ${esc(a.came_from)}</span>`:""}</div>
+function renderAgents(st){st={...st,agents:st.agents.filter(a=>!["moved","stopped"].includes(a.status))};const box=$("#agents");if(!st.agents.length){box.innerHTML='<div class="empty">no agents right now</div>';return}
+  box.innerHTML=st.agents.map(a=>`<div class="ag" data-n="${esc(a.name)}"><div><div class="n">${esc(a.name)} ${a.status==="moved"?`<span class="pill mv">moved → ${esc(a.moved_to)}</span>`:a.status==="away"?`<span class="pill mv">teleporting</span>`:`<span class="pill ${a.alive?"run":"dead"}">${a.alive?"alive":"down"}</span>`}${a.came_from?` <span class="pill mv" title="moved here alive from ${esc(a.came_from)} with cryo teleport">teleported from ${esc(a.came_from)}</span>`:""}</div>
     <div class="m">${esc(a.program)} · ${a.image_bytes?(a.image_bytes/1e6).toFixed(0)+" MB":"—"}${a.paused_seconds!=null?" · paused "+a.paused_seconds.toFixed(2)+"s":""} · frozen ${ago(a.last_freeze)}</div></div>
     <div class="x">${a.thaws}<small>deaths survived</small></div></div>`).join("");
   st.agents.forEach(a=>{if(lastF[a.name]&&lastF[a.name]!==a.last_freeze){const el=box.querySelector(`[data-n="${CSS.escape(a.name)}"]`);el&&el.classList.add("flash")}lastF[a.name]=a.last_freeze})}
 function evTxt(e){const s=e.seconds!=null?` in ${e.seconds}s`:"";switch(e.kind){
-  case"freeze":return`<b>${esc(e.agent)}</b> frozen${e.paused!=null?` (paused ${e.paused}s)`:s}`;case"thaw":return`<b>${esc(e.agent)}</b> came back${s}`;
+  case"freeze":return`<b>${esc(e.agent)}</b> snapshot saved${e.paused!=null?` (paused ${e.paused}s)`:""}`;case"thaw":return`<b>${esc(e.agent)}</b> came back${s}`;
   case"reboot_detected":return`<b>${esc(e.agent)}</b> died in a restart`;case"restart_requested":return`someone pressed <b>kill</b>`;
   case"alert":return`✉ ${esc(e.subject||"")}`;case"alert_skipped":return`✉ email skipped (${esc(e.reason||"")})`;case"run":return`<b>${esc(e.agent)}</b> was born`;case"say":return`<b>${esc(e.agent)}</b> got a message`;
   case"install":return`cryo service installed`;case"teleport":return`<b>${esc(e.agent)}</b> packed for teleport`;
   case"bundle_sent":return`<b>${esc(e.agent)}</b> left this Sprite`;case"landed":return`<b>${esc(e.agent)}</b> landed on ${esc(e.to)}`;
   case"arrived":return`<b>${esc(e.agent)}</b> arrived from ${esc(e.from_sprite)} in ${e.seconds}s`;default:return`${esc(e.kind)} ${esc(e.agent||"")}`}}
-function renderEvents(evs){const rows=[];for(let i=evs.length-1;i>=0&&rows.length<14;i--){const e=evs[i],id=e.t+e.kind+e.agent,nw=!first&&!seen.has(id);seen.add(id);
+const STORY=new Set(["restart_requested","reboot_detected","thaw","freeze","alert","run","teleport","landed","arrived"]);
+function renderEvents(all){const evs=all.filter(e=>STORY.has(e.kind));const rows=[];for(let i=evs.length-1;i>=0&&rows.length<14;i--){const e=evs[i],id=e.t+e.kind+e.agent,nw=!first&&!seen.has(id);seen.add(id);
   if(nw&&restarting)logLive(evTxt(e),e.kind==="thaw"?"g":e.kind==="reboot_detected"?"r":"k");
   rows.push(`<div class="ev ${esc(e.kind)}${nw?" new":""}"><span class="tm">${new Date(e.t*1000).toLocaleTimeString([],{hour12:false,hour:"2-digit",minute:"2-digit",second:"2-digit"})}</span><span>${evTxt(e)}</span></div>`)}
-  $("#evs").innerHTML=rows.join("")||'<div class="empty">nothing yet</div>';$("#evn").textContent=evs.length+" events";first=false}
+  $("#evs").innerHTML=rows.join("")||'<div class="empty">nothing yet</div>';$("#evn").textContent="newest first";first=false}
 let busy=false,fitted=false;
 async function poll(){if(busy)return;busy=true;try{const[st,evs]=await Promise.all([get("/api/state"),get("/api/events")]);renderAgents(st);renderEvents(evs);
   const c=$("#conn");c.className="dot on";c.lastElementChild.textContent="live";if(restarting)prog(st);lastEnv=st.environment;
