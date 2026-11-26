@@ -163,10 +163,22 @@ def dir_size(path):
 # --tcp-established and come back closed (--tcp-close); the client reconnects.
 # CRIU normally locks them with iptables while dumping, but there's no iptables
 # on a Sprite and we don't need the lock when the sockets are restored closed.
+def to_root_cgroup():
+    """Sprite services run in their own cgroups (/svc.<name>), and work started
+    from there runs far slower than from a shell: a dump that takes 0.05 s from
+    a terminal took 6-40 s from the cryo services. Run criu from the top cgroup,
+    which also leaves thawed agents there instead of inside a service's group."""
+    try:
+        with open("/sys/fs/cgroup/cgroup.procs", "w") as f:
+            f.write(str(os.getpid()))
+    except OSError:
+        pass
+
+
 def criu(args, log_dir):
     """Run criu, return (ok, seconds, error_lines)."""
     t0 = now()
-    r = subprocess.run(["criu"] + args, capture_output=True, text=True)
+    r = subprocess.run(["criu"] + args, capture_output=True, text=True, preexec_fn=to_root_cgroup)
     dt = now() - t0
     errs = []
     for line in (r.stderr or "").splitlines():
@@ -409,7 +421,9 @@ def paused_seconds(images):
     again while criu is still writing pages to disk, so the dump's wall time
     overstates it (on a Sprite the write is most of it: ~50 MB/s)."""
     try:
-        r = subprocess.run(["crit", "show", os.path.join(images, "stats-dump")],
+        crit = shutil.which("crit") or next((p for p in ("/usr/bin/crit", "/usr/sbin/crit",
+                                                          "/usr/local/bin/crit") if os.path.exists(p)), "crit")
+        r = subprocess.run([crit, "show", os.path.join(images, "stats-dump")],
                            capture_output=True, text=True, timeout=10)
         d = json.loads(r.stdout)["entries"][0]["dump"]
         return round((int(d["freezing_time"]) + int(d["frozen_time"])) / 1e6, 3)
