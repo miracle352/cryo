@@ -654,7 +654,7 @@ def cmd_boot(a, retry=None):
         ok, msg = revive(m, retry)
         if msg:
             print("cryo:", msg, flush=True)
-        if ok is not None and m.get("_restarted"):
+        if ok is not None:      # revive only thaws (or gives up) after a restart
             (back if ok else lost).append(msg)
     if back or lost:
         restart_alert(back, lost)
@@ -682,7 +682,6 @@ def revive(m, retry=None):
         return None, f"{name}: exited on its own; left alone (cryo thaw {name} brings it back)"
     if retry is not None and time.monotonic() < retry.get(name, (0, 0))[1]:
         return None, ""
-    m["_restarted"] = True
     event("reboot_detected", name, old_boot_id=m.get("boot_id"))
     ok, msg = thaw(m)
     if not ok:
@@ -695,7 +694,6 @@ def revive(m, retry=None):
                 m["status"] = "failed"
                 save(m)
             event("gave_up", name, tries=n)
-            m["_restarted"] = True
             return False, msg + f"\n  (gave up after {n} tries; cryo thaw {name} to try again)"
         return None, ""
     if retry is not None:
