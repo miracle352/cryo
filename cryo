@@ -494,6 +494,7 @@ def cmd_thaw(a):
 def cmd_boot(a):
     """Thaw every agent whose process died because the machine restarted."""
     bid = boot_id()
+    back, lost = [], []
     for m in all_agents():
         if alive(m["pid"]) or m["status"] in PARKED:
             continue
@@ -503,9 +504,30 @@ def cmd_boot(a):
         ok, msg = thaw(m)
         print("cryo:", msg, flush=True)
         if restarted:
-            host = os.uname().nodename
-            send_alert(f"cryo: {m['name']} survived a restart" if ok else f"cryo: {m['name']} did NOT come back",
-                       f"{msg}\n\nSprite: {host}\nTime: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
+            (back if ok else lost).append(msg)
+    if back or lost:
+        restart_alert(back, lost)
+
+
+def restart_alert(back, lost):
+    """One email per restart, not one per agent. A Sprite whose restart button is
+    public can be restarted by anyone, so good news is sent at most once every
+    `alert_every` seconds (default 30 min); an agent that didn't come back is
+    always sent."""
+    c = load_config()
+    every = c.get("alert_every", 1800)
+    if not lost and now() - c.get("last_restart_alert", 0) < every:
+        event("alert_skipped", "*", reason=f"one restart email per {every // 60} min")
+        return
+    n = len(back) + len(lost)
+    subject = (f"cryo: {len(lost)} of {n} agents did NOT come back" if lost
+               else f"cryo: {'all ' + str(n) + ' agents' if n > 1 else 'your agent'} survived a restart")
+    body = "\n".join(lost + back) + (f"\n\nSprite: {sprite_name()}\n"
+                                      f"Time: {time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime())}")
+    if send_alert(subject, body):
+        c = load_config()
+        c["last_restart_alert"] = now()
+        save_config(c)
 
 
 def cmd_watch(a):
@@ -977,6 +999,8 @@ def cmd_alerts(a):
         c["email"] = a.email
     if a.gateway:
         c["resend_gateway"] = a.gateway.rstrip("/")
+    if a.every is not None:
+        c["alert_every"] = max(0, a.every) * 60
     if not c.get("resend_gateway"):
         gw = find_resend_gateway()
         if not gw:
@@ -1303,6 +1327,8 @@ def main():
     al.add_argument("--email", help="where to send alerts")
     al.add_argument("--gateway", help="Resend gateway URL from the connector page (auto-detected if omitted)")
     al.add_argument("--test", action="store_true", help="send a test email")
+    al.add_argument("--every", type=int, metavar="MINUTES",
+                    help="at most one 'survived a restart' email per this many minutes (default 30)")
     al.set_defaults(fn=cmd_alerts)
 
     rp = sub.add_parser("report", help="email a report through the Resend connector")

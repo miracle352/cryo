@@ -388,7 +388,7 @@ function renderAgents(st){const box=$("#agents");if(!st.agents.length){box.inner
 function evTxt(e){const s=e.seconds!=null?` in ${e.seconds}s`:"";switch(e.kind){
   case"freeze":return`<b>${esc(e.agent)}</b> frozen${e.paused!=null?` (paused ${e.paused}s)`:s}`;case"thaw":return`<b>${esc(e.agent)}</b> came back${s}`;
   case"reboot_detected":return`<b>${esc(e.agent)}</b> died in a restart`;case"restart_requested":return`someone pressed <b>kill</b>`;
-  case"alert":return`✉ ${esc(e.subject||"")}`;case"run":return`<b>${esc(e.agent)}</b> was born`;case"say":return`<b>${esc(e.agent)}</b> got a message`;
+  case"alert":return`✉ ${esc(e.subject||"")}`;case"alert_skipped":return`✉ email skipped (${esc(e.reason||"")})`;case"run":return`<b>${esc(e.agent)}</b> was born`;case"say":return`<b>${esc(e.agent)}</b> got a message`;
   case"install":return`cryo service installed`;case"teleport":return`<b>${esc(e.agent)}</b> packed for teleport`;
   case"bundle_sent":return`<b>${esc(e.agent)}</b> left this Sprite`;case"landed":return`<b>${esc(e.agent)}</b> landed on ${esc(e.to)}`;
   case"arrived":return`<b>${esc(e.agent)}</b> arrived from ${esc(e.from_sprite)} in ${e.seconds}s`;default:return`${esc(e.kind)} ${esc(e.agent||"")}`}}
