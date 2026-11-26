@@ -586,6 +586,7 @@ MOVED_ARGS = ("--manage-cgroups=ignore",)
 def files_in_use(pid):
     """Regular files the process tree has open or mapped, and every task's cwd."""
     paths, dirs, pids = set(), set(), process_tree(pid)
+    socks = set()
     for p in pids:
         try:
             dirs.add(os.readlink(f"/proc/{p}/cwd"))
@@ -599,6 +600,8 @@ def files_in_use(pid):
                     continue
                 if t.startswith("/"):
                     paths.add(t)
+                elif t.startswith("socket:["):
+                    socks.add(t[8:-1])
         except OSError:
             pass
         try:
@@ -609,6 +612,16 @@ def files_in_use(pid):
                         paths.add(parts[5].rstrip("\n"))
         except OSError:
             pass
+    # unix sockets bound to a path: criu re-binds them there, so their folders must exist
+    try:
+        with open("/proc/net/unix") as f:
+            next(f)
+            for line in f:
+                parts = line.split()
+                if len(parts) >= 8 and parts[6] in socks and parts[7].startswith("/"):
+                    dirs.add(os.path.dirname(parts[7]))
+    except OSError:
+        pass
     files = []
     for path in sorted(paths):
         if path.endswith(" (deleted)") or path.startswith(VIRTUAL) or not os.path.isfile(path):
@@ -911,6 +924,8 @@ def cmd_say(a):
     m = load(a.name)
     if not m.get("tmux"):
         sys.exit(f"cryo: {a.name} isn't running in tmux")
+    if not alive(m["pid"]):
+        sys.exit(f"cryo: {a.name} isn't running ({m['status']}); `sudo cryo thaw {a.name}` first")
     sock = f"cryo-{a.name}"
     subprocess.run(["tmux", "-L", sock, "send-keys", "-t", a.name, "-l", a.text], check=True)
     time.sleep(0.3)
