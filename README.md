@@ -97,6 +97,14 @@ Both Sprites need the same versions of the programs the agent runs (claude,
 node, python). If they differ, `import` says which file and changes nothing;
 teleport again with `--carry-max 512` to bring the bigger files along.
 
+Move agents toward the Sprite that has been up longer (finding 7 below):
+`import` compares the two clocks and refuses to land an agent whose timers
+would stall. Both Sprites also need Claude logged in, since Claude checks its
+login against the machine it's on.
+
+Tested: Claude Code moved from cryo-lab-2 to cryo-lab (49.8 MB bundle, 0.34 s
+thaw) and answered "The codeword is TELEPORT-9. hostname returned cryo-lab".
+
 ## How it works
 
 1. **Run.** cryo starts the agent as root inside a small seccomp filter that
@@ -133,6 +141,12 @@ Tested on kernel `6.12.87-fly`, CRIU 4.2 from Ubuntu.
 6. **Timers count awake time.** A paused Sprite freezes every process, so a
    60 s timer can take much longer on the wall clock. cryo snapshots on
    activity instead.
+7. **Clocks don't travel.** `CLOCK_MONOTONIC` counts from each Sprite's boot,
+   and with (2) a moved process can't keep its old clock. We moved Claude Code
+   to a Sprite that had booted 10 hours later: it restored fine and then sat
+   frozen, every timer (including the one that redraws the screen) waiting for
+   that Sprite's clock to catch up. Moved the other way, it answered at once.
+   `cryo import` checks the two clocks first.
 
 Also: there's no `iptables` on a Sprite, so cryo passes
 `--network-lock skip` (sockets are restored closed anyway).
@@ -146,10 +160,13 @@ Also: there's no `iptables` on a Sprite, so cryo passes
 | Python | 2,000,000 floats | | |
 | tmux + Python REPL | live variables | | |
 | full Sprite checkpoint restore | all of the above, hands off | auto | auto |
+| teleport to another Sprite | Claude's conversation | 0.32 s | 0.34 s |
 
 ## Limits
 
 - Network connections are closed on thaw.
+- Teleport only lands on a Sprite whose clock is ahead, with the same program
+  versions (or `--carry-max`) and Claude logged in.
 - Agents can't use inotify or io_uring while under cryo.
 - Everything runs as root.
 - A snapshot is as big as the process's memory (~190 MB for Claude Code).

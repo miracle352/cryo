@@ -144,6 +144,8 @@ section{position:relative;padding:120px 0}
 .dive code{font:13px var(--mono)}
 .dive .fix{margin-top:14px;font:12px/1.6 var(--mono);color:var(--green)}
 .dive .fix::before{content:"↳ "}
+.dive.wide{grid-column:1/-1;display:grid;grid-template-columns:150px 1fr;gap:20px;border-color:rgba(143,216,255,.25);background:linear-gradient(90deg,rgba(143,216,255,.06),rgba(255,255,255,.02))}
+@media (max-width:700px),(max-width:980px) and (orientation:portrait){.dive.wide{grid-template-columns:1fr}}
 #bring{background:linear-gradient(#070b0e,#0a0908)}
 .code{margin-top:36px;padding:24px;border-radius:14px;background:#050505;border:1px solid rgba(255,255,255,.07);font:13px/1.9 var(--mono);color:#cfcbc3;white-space:pre-wrap;word-break:break-word;position:relative}
 .code .c{color:var(--di)}
@@ -248,8 +250,8 @@ footer{padding:44px 32px;display:flex;justify-content:space-between;flex-wrap:wr
 </header>
 
 <section id="log"><div class="wrap">
-  <div class="rv"><div class="kicker">Dive log</div><h2 class="big">Six walls the docs <em>don't mention.</em></h2>
-  <p class="lede">Freezing a process on a Sprite with CRIU hit six walls. Here is each one, and the way around it. A few of them may be news to Fly too.</p></div>
+  <div class="rv"><div class="kicker">Dive log</div><h2 class="big">Seven walls the docs <em>don't mention.</em></h2>
+  <p class="lede">Freezing a process on a Sprite with CRIU, and moving it to another one, hit seven walls. Here is each one, and the way around it. A few of them may be news to Fly too.</p></div>
   <div class="dives">
     <div class="dive rv"><div class="d">depth<b>01</b></div><h4>Root can't trace other users</h4><p>Sprites drop CAP_SYS_PTRACE, so CRIU can't freeze anything the <code>sprite</code> user owns.</p><div class="fix">agents start as root, the same owner as CRIU</div></div>
     <div class="dive rv"><div class="d">depth<b>02</b></div><h4>Time can't be restored</h4><p>No CAP_SYS_TIME, so restoring a time namespace fails outright.</p><div class="fix">drop the timens image; the clock just jumps</div></div>
@@ -257,23 +259,25 @@ footer{padding:44px 32px;display:flex;justify-content:space-between;flex-wrap:wr
     <div class="dive rv"><div class="d">depth<b>04</b></div><h4>The disk lies about devices</h4><p>On the overlay root, folders report one device and files another, so watched files can't be found. io_uring can't be dumped at all.</p><div class="fix">the same filter switches off inotify and io_uring</div></div>
     <div class="dive rv"><div class="d">depth<b>05</b></div><h4>Restore keeps the boot_id</h4><p>It restarts the container, not the kernel, so "did we reboot?" says no.</p><div class="fix">pair boot_id with PID 1's start time</div></div>
     <div class="dive rv"><div class="d">depth<b>06</b></div><h4>Timers only tick while awake</h4><p>A paused Sprite freezes every process, so "every 60 seconds" can mean an hour.</p><div class="fix">snapshot after real work, measured in CPU time</div></div>
+    <div class="dive rv wide"><div class="d">depth<b>07</b></div><div><h4>Clocks don't travel between Sprites</h4><p>Every Sprite's monotonic clock counts from its own boot, and without a time namespace a moved process can't be given its old clock. Land on a Sprite that booted later and every timer in the agent waits for hours. We moved Claude to a younger Sprite and it froze mid-sentence; moved toward the older one, it answered at once.</p><div class="fix">teleport checks both clocks and only lands agents moving forward in time</div></div></div>
   </div>
 </div></section>
 
 <section id="bring"><div class="wrap">
   <div class="rv"><div class="kicker">Bring your own agent</div><h2 class="big">Give yours a <em>second life.</em></h2>
-  <p class="lede">One Python file on top of CRIU and two Sprite services. When an agent comes back, cryo emails you through the Resend connector, and the key never touches the machine.</p></div>
+  <p class="lede">One Python file on top of CRIU and two Sprite services. When an agent comes back, or lands on another Sprite, cryo emails you through the Resend connector, and the key never touches the machine.</p></div>
   <div class="code rv" id="code"><button class="copy" id="copyBtn">copy</button><span class="c"># on any Sprite</span>
 sudo apt-get install -y criu tmux
 git clone https://github.com/miracle352/cryo && cd cryo && sudo ln -sf "$PWD/cryo" /usr/local/bin/cryo
 sudo env PATH="$PATH" HOME=$HOME IS_SANDBOX=1 cryo run myagent --tmux -- claude
 sudo env PATH="$PATH" HOME=$HOME cryo install --api        <span class="c"># freeze after work, thaw on every boot</span>
-sudo cryo alerts --email you@example.com                     <span class="c"># "your agent survived a restart"</span></div>
+sudo cryo alerts --email you@example.com                     <span class="c"># "your agent survived a restart"</span>
+sudo cryo teleport myagent                                   <span class="c"># move it, alive, to another Sprite</span></div>
   <div class="facts rv" id="facts">
     <div><b data-to="0.17" data-d="2">0</b><span>s to thaw Claude Code</span></div>
     <div><b data-to="0.04" data-d="2">0</b><span>s to thaw a Node server</span></div>
     <div><b data-to="190" data-d="0">0</b><span>MB of memory kept</span></div>
-    <div><b data-to="6" data-d="0">0</b><span>walls found and beaten</span></div>
+    <div><b data-to="7" data-d="0">0</b><span>walls found and beaten</span></div>
   </div>
 </div></section>
 <footer><span>Cryo · Fly.io Hacksgiving 2026 · by @miracle352</span><span>ice: Ilona A. / Unsplash · CRIU · Fly.io Sprites</span></footer>
