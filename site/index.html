@@ -54,12 +54,12 @@ h1{font:400 76px/.98 var(--serif);letter-spacing:-.02em;margin-bottom:16px}
 h1 em{font-style:italic;color:var(--accent,var(--warm));transition:color .6s}
 
 .screen{position:relative}
-.hudrow{display:flex;gap:28px;margin-bottom:12px;font:500 10px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--mu)}
-.hudrow b{display:block;font:500 22px var(--mono);letter-spacing:-.01em;color:var(--ink);text-transform:none;transition:color .4s}
+.hudrow{display:flex;gap:32px;margin-bottom:12px;font:500 12px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--mu)}
+.hudrow b{display:block;font:500 24px var(--mono);letter-spacing:-.01em;color:var(--ink);text-transform:none;transition:color .4s}
 .hudrow .live{margin-left:auto;align-self:flex-end;display:none;color:var(--red);font-weight:700}
 .hudrow .live.on{display:block;animation:kb 1s infinite}
 @media(max-width:560px){.hudrow{gap:16px}.hudrow b{font-size:16px}}
-.term{position:relative;background:rgba(13,12,11,.93);border-radius:14px;
+.term{position:relative;font-size:14px!important;background:rgba(13,12,11,.93);border-radius:14px;
   box-shadow:0 0 0 1px rgba(255,255,255,.08) inset,0 40px 120px -30px var(--tglow,rgba(255,176,103,.4));font:13px/1.85 var(--mono);transition:box-shadow .6s;opacity:var(--to,1)}
 .term .bar{display:flex;justify-content:space-between;padding:10px 16px;border-bottom:1px solid rgba(255,255,255,.06);color:var(--di);font-size:11px}
 .term .bar i{font-style:normal}
@@ -82,29 +82,29 @@ h1 em{font-style:italic;color:var(--accent,var(--warm));transition:color .6s}
 /* story strip */
 .strip{margin-top:24px}
 .segs{display:grid;grid-template-columns:repeat(5,1fr);gap:6px}
-.seg{cursor:pointer;font:500 10px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--di);transition:color .3s}
+.seg{cursor:pointer;font:500 12px var(--mono);letter-spacing:.1em;text-transform:uppercase;color:var(--di);transition:color .3s}
 .seg i{display:block;height:2px;background:rgba(255,255,255,.12);margin-bottom:8px;overflow:hidden;border-radius:2px}
 .seg i b{display:block;height:100%;width:0;background:var(--ink)}
 .seg.on{color:var(--ink)}
 @media(max-width:560px){.seg{font-size:8px;letter-spacing:.04em}.body{height:230px;font-size:11.5px}.term{font-size:11.5px}}
 .capline{margin-top:14px;min-height:64px;position:relative}
-.capline p{position:absolute;top:0;right:0;bottom:0;left:0;font:400 26px/1.25 var(--serif);color:var(--ink);opacity:0;transform:translateY(10px);filter:blur(4px);transition:.5s}
+.capline p{position:absolute;top:0;right:0;bottom:0;left:0;font:400 30px/1.2 var(--serif);color:var(--ink);opacity:0;transform:translateY(10px);filter:blur(4px);transition:.5s}
 .capline p.on{opacity:1;transform:none;filter:none}
 .capline p em{color:var(--accent2,var(--mu));font-style:italic}
-.realnote{margin-top:6px;font:11px var(--mono);color:var(--di);display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+.realnote{margin-top:6px;font:13px var(--mono);color:var(--di);display:flex;gap:16px;align-items:center;flex-wrap:wrap}
 .realnote button{all:unset;cursor:pointer;color:var(--mu);border-bottom:1px dashed var(--di)}
 .realnote button:hover{color:var(--ink)}
 
 /* live card */
 .card{background:rgba(12,12,13,.9);border:1px solid rgba(255,255,255,.09);border-radius:20px;overflow:hidden;box-shadow:0 30px 100px -40px rgba(0,0,0,.9)}
-.ch{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid rgba(255,255,255,.06);font:500 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--mu)}
+.ch{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;border-bottom:1px solid rgba(255,255,255,.06);font:500 12px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--mu)}
 .dot{display:inline-flex;align-items:center;gap:8px}.dot i{width:7px;height:7px;border-radius:50%;background:var(--di)}
 .dot.on i{background:var(--green);animation:lp 2s infinite}.dot.off i{background:var(--red)}
 @keyframes lp{0%{box-shadow:0 0 0 0 rgba(92,240,168,.6)}70%{box-shadow:0 0 0 8px rgba(92,240,168,0)}}
 #agents{height:178px;overflow-y:auto;scrollbar-width:thin;scrollbar-color:#333 transparent}
 .ag{display:grid;grid-template-columns:1fr auto;gap:10px;align-items:center;padding:10px 18px;border-bottom:1px solid rgba(255,255,255,.05);position:relative;overflow:hidden}
 .ag .n{font:600 15px Inter;display:flex;gap:10px;align-items:center}
-.ag .m{font:11px var(--mono);color:var(--di);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:300px}
+.ag .m{font:12px var(--mono);color:var(--di);margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:300px}
 .ag .x{text-align:right;font:400 24px var(--serif);font-style:italic;color:var(--ice);line-height:1}
 .ag .x small{display:block;font:500 9px var(--mono);font-style:normal;color:var(--di);letter-spacing:.08em;text-transform:uppercase;margin-top:4px}
 .pill{font:500 9px var(--mono);letter-spacing:.08em;padding:3px 7px;border-radius:999px;text-transform:uppercase}
@@ -112,20 +112,20 @@ h1 em{font-style:italic;color:var(--accent,var(--warm));transition:color .6s}
 .ag.flash::after{content:"";position:absolute;top:0;right:0;bottom:0;left:0;background:linear-gradient(100deg,transparent 20%,rgba(143,216,255,.18) 50%,transparent 80%);animation:sw 1.2s}
 @keyframes sw{from{transform:translateX(-100%)}to{transform:translateX(100%)}}
 .evs{height:110px;overflow:hidden;padding:8px 18px;-webkit-mask-image:linear-gradient(#000 60%,transparent);mask-image:linear-gradient(#000 60%,transparent)}
-.ev{display:grid;grid-template-columns:58px 1fr;gap:8px;font:11.5px/1.5 var(--mono);color:var(--mu);padding:4px 0}
+.ev{display:grid;grid-template-columns:64px 1fr;gap:8px;font:12.5px/1.5 var(--mono);color:var(--mu);padding:4px 0}
 .ev .tm{color:var(--di)}.ev b{color:var(--ink);font-weight:500}
 .ev.thaw span:last-child{color:var(--green)}.ev.reboot_detected span:last-child{color:var(--red)}
 .ev.new{animation:evn .7s}@keyframes evn{from{opacity:0;transform:translateX(-10px)}}
 .empty{padding:22px;text-align:center;color:var(--di);font:12px var(--mono)}
 .memo{padding:16px 18px;border-top:1px solid rgba(255,255,255,.06);background:radial-gradient(120% 140% at 0% 0%,rgba(143,216,255,.07),transparent 60%)}
-.memo .lbl,.killbox .lbl{font:500 11px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--mu);margin-bottom:10px;display:flex;justify-content:space-between}
+.memo .lbl,.killbox .lbl{font:500 12px var(--mono);letter-spacing:.08em;text-transform:uppercase;color:var(--mu);margin-bottom:10px;display:flex;justify-content:space-between}
 .memo .lbl b{color:var(--ice);font-weight:500}
 #wform{display:flex;gap:8px}
 #win{flex:1;min-width:0;background:#060708;border:1px solid rgba(143,216,255,.25);border-radius:10px;padding:11px 12px;color:var(--ink);font:14px var(--mono);outline:none;transition:border-color .2s,box-shadow .2s}
 #win:focus{border-color:var(--ice);box-shadow:0 0 0 3px rgba(143,216,255,.15)}
 #wform button{all:unset;cursor:pointer;padding:0 16px;border-radius:10px;background:var(--ice);color:#04121c;font:700 13px Inter;transition:transform .15s}
 #wform button:hover{transform:translateY(-1px)}#wform button[disabled]{opacity:.5;cursor:default}
-.wnote{margin-top:9px;font:11.5px/1.5 var(--mono);color:var(--di);height:34px;overflow:hidden}
+.wnote{margin-top:9px;font:12.5px/1.45 var(--mono);color:var(--di);height:34px;overflow:hidden}
 .wnote q{color:var(--ink)}.wnote.ok{color:var(--mu)}.wnote.back{color:var(--green)}.wnote.back q{color:#d8ffe9}.wnote.gone{color:var(--red)}
 .memo.glow{animation:mglow 1.6s}@keyframes mglow{0%{box-shadow:inset 0 0 0 2px rgba(92,240,168,.9)}100%{box-shadow:inset 0 0 0 2px rgba(92,240,168,0)}}
 .killbox{padding:18px;border-top:1px solid rgba(255,77,77,.2);background:radial-gradient(100% 160% at 50% 120%,rgba(255,77,77,.16),transparent 70%)}
@@ -133,7 +133,7 @@ h1 em{font-style:italic;color:var(--accent,var(--warm));transition:color .6s}
 .kill:hover{transform:translateY(-1px) scale(1.01);box-shadow:0 18px 60px -10px rgba(255,77,77,1)}
 .kill:active{transform:scale(.98)}.kill[disabled]{opacity:.5;cursor:default}
 .kill i{width:9px;height:9px;border-radius:50%;background:#1a0505;animation:kb 1s infinite}@keyframes kb{50%{opacity:.25}}
-.note{font:11px var(--mono);color:var(--di);margin-top:10px;text-align:center;min-height:15px}
+.note{font:12px var(--mono);color:var(--di);margin-top:10px;text-align:center;min-height:15px}
 
 .scrollcue{position:absolute;left:0;right:0;bottom:12px;bottom:clamp(6px,1.4vh,16px);z-index:5;text-align:center;font:500 10px var(--mono);letter-spacing:.2em;color:var(--di);text-transform:uppercase}
 
@@ -146,7 +146,35 @@ section{position:relative;padding:120px 0}
 .lede{color:var(--mu);max-width:620px;font-size:17px}
 .rv{opacity:0;transform:translateY(40px);transition:opacity 1s cubic-bezier(.2,.8,.2,1),transform 1s cubic-bezier(.2,.8,.2,1)}
 .rv.in{opacity:1;transform:none}
-#log{background:linear-gradient(#0a0908,#070b0e)}
+/* how it works */
+#how{background:linear-gradient(#0a0908,#080a0c)}
+.rig{position:relative;margin-top:56px;height:330px;border-radius:22px;background:rgba(255,255,255,.02);border:1px solid rgba(255,255,255,.07);overflow:hidden}
+.box{position:absolute;top:34px;width:38%;height:262px;border-radius:16px;border:1px solid rgba(255,255,255,.12);background:rgba(10,10,11,.8);transition:border-color .3s,box-shadow .3s}
+.box.a{left:5%}.box.b{right:5%}
+.box .hd{display:flex;justify-content:space-between;padding:14px 18px;font:500 13px var(--mono);color:var(--mu);border-bottom:1px solid rgba(255,255,255,.06)}
+.box .hd b{color:var(--ink);font-weight:500}
+.slot{position:absolute;left:18px;right:18px;height:72px;border-radius:12px;border:1px dashed rgba(255,255,255,.14);font:500 11px var(--mono);letter-spacing:.12em;text-transform:uppercase;color:var(--di);padding:8px 12px}
+.slot.ram{top:62px}.slot.disk{top:166px}
+.box.dead{border-color:rgba(255,77,77,.7);box-shadow:0 0 60px -10px rgba(255,77,77,.6)}
+.box.dead .slot.ram{background:repeating-linear-gradient(45deg,rgba(255,77,77,.08) 0 8px,transparent 8px 16px)}
+.chip{position:absolute;width:190px;height:46px;border-radius:10px;display:flex;align-items:center;gap:10px;padding:0 14px;font:600 14px Inter;color:#160c04;background:var(--warm);box-shadow:0 10px 40px -8px rgba(255,176,103,.8);transform:translate(-50%,-50%);will-change:left,top,opacity}
+.chip i{font:500 11px var(--mono);font-style:normal;opacity:.75}
+.chip.ice{background:var(--ice2);color:#04121c;box-shadow:0 10px 40px -8px rgba(143,216,255,.9)}
+.chip.red{background:var(--red);box-shadow:0 10px 40px -8px rgba(255,77,77,.9)}
+.clockA,.clockB{position:absolute;bottom:14px;font:12px var(--mono);color:var(--di)}
+.clockA{left:5%;margin-left:18px}.clockB{right:5%;margin-right:18px}
+.clockB.ok{color:var(--green)}
+.arrow{position:absolute;top:50%;left:44%;width:12%;height:2px;background:linear-gradient(90deg,transparent,rgba(143,216,255,.6),transparent);opacity:0;transition:opacity .3s}
+.arrow.on{opacity:1}
+.steps{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-top:18px}
+.step{padding:18px;border-radius:16px;border:1px solid rgba(255,255,255,.07);background:rgba(255,255,255,.02);transition:border-color .3s,background .3s,transform .3s;cursor:pointer}
+.step b{display:block;font:400 40px/1 var(--serif);font-style:italic;color:var(--di);transition:color .3s}
+.step h4{font:600 17px Inter;margin:10px 0 6px}
+.step p{color:var(--mu);font-size:14.5px;line-height:1.5}
+.step.on{border-color:rgba(143,216,255,.45);background:rgba(143,216,255,.06);transform:translateY(-3px)}
+.step.on b{color:var(--ice)}
+@media (max-width:700px),(max-width:980px) and (orientation:portrait){.steps{grid-template-columns:1fr 1fr}.rig{height:300px}.chip{width:132px;font-size:12px;padding:0 10px}.chip i{display:none}}
+#log{background:linear-gradient(#080a0c,#070b0e)}
 .dives{margin-top:56px;display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
 @media(max-width:900px){.dives{grid-template-columns:1fr}}
 .dive{position:relative;padding:26px;border-radius:18px;background:rgba(255,255,255,.025);border:1px solid rgba(255,255,255,.07);overflow:hidden;transition:transform .4s,border-color .4s,opacity 1s,translate 1s}
@@ -201,7 +229,7 @@ footer{padding:44px 32px;display:flex;justify-content:space-between;flex-wrap:wr
   <div class="flash" id="flash"></div>
 
   <div class="top"><a href="#top"><b>CRYO</b></a>
-    <nav><a href="#log">Dive log</a><a href="#bring">Install</a><a href="https://github.com/miracle352/cryo">GitHub ↗</a></nav></div>
+    <nav><a href="#how">How it works</a><a href="#log">Dive log</a><a href="#bring">Install</a><a href="https://github.com/miracle352/cryo">GitHub ↗</a></nav></div>
 
   <div class="heroin">
     <div>
@@ -258,7 +286,7 @@ footer{padding:44px 32px;display:flex;justify-content:space-between;flex-wrap:wr
       <div class="ch" style="border-top:1px solid rgba(255,255,255,.06)"><span>What happened</span><span id="evn">—</span></div>
       <div class="evs" id="evs"></div>
       <div class="memo" id="memo">
-        <div class="lbl"><span>1 · Leave something in its memory</span><b id="kpid"></b></div>
+        <div class="lbl"><span>1 · Leave a word in its memory</span><b id="kpid"></b></div>
         <form id="wform" autocomplete="off"><input id="win" maxlength="40" placeholder="your name, a word, anything"><button id="wbtn">Keep it</button></form>
         <div class="wnote" id="wnote">It goes into one process's RAM. That program never writes it to a file.</div>
       </div>
@@ -271,6 +299,25 @@ footer{padding:44px 32px;display:flex;justify-content:space-between;flex-wrap:wr
   </div>
   <div class="scrollcue">how it works ↓</div>
 </header>
+
+<section id="how"><div class="wrap">
+  <div class="rv"><div class="kicker">How it works</div><h2 class="big">Freeze, die, thaw. <em>Or move.</em></h2>
+  <p class="lede">CRIU copies a running process, every page of its memory, to disk. cryo decides when, and puts it back.</p></div>
+  <div class="rig rv" id="rig">
+    <div class="box a" id="boxA"><div class="hd"><b>cryo-lab-2</b><span id="stA">running</span></div><div class="slot ram">memory</div><div class="slot disk">disk</div></div>
+    <div class="box b" id="boxB"><div class="hd"><b>cryo-lab</b><span id="stB">running</span></div><div class="slot ram">memory</div><div class="slot disk">disk</div></div>
+    <div class="arrow" id="arrow"></div>
+    <div class="clockA" id="clkA">up 6 h</div><div class="clockB" id="clkB">up 17 h</div>
+    <div class="chip" id="chipLive">claude <i>190 MB</i></div>
+    <div class="chip ice" id="chipCopy">claude <i>on disk</i></div>
+  </div>
+  <div class="steps">
+    <div class="step" data-k="0"><b>1</b><h4>Freeze</h4><p>After the agent does real work, cryo copies it to disk. It's paused for about 0.26 s.</p></div>
+    <div class="step" data-k="1"><b>2</b><h4>Die</h4><p>The Sprite goes cold, moves host or is restored. Every process is gone. The disk isn't.</p></div>
+    <div class="step" data-k="2"><b>3</b><h4>Thaw</h4><p>On boot, cryo restores the copy: same process, same memory, mid-sentence.</p></div>
+    <div class="step" data-k="3"><b>4</b><h4>Teleport</h4><p>Or ship the copy to another Sprite and thaw it there. Only toward a Sprite whose clock is ahead.</p></div>
+  </div>
+</div></section>
 
 <section id="log"><div class="wrap">
   <div class="rv"><div class="kicker">Dive log</div><h2 class="big">Seven walls the docs <em>don't mention.</em></h2>
@@ -387,7 +434,7 @@ function render(p){
 }
 
 /* ---------- replay clock: 20 s story, a hold, then loop. pauses when off screen ---------- */
-const DUR=20000,HOLD=3500;let t0=performance.now(),heroVisible=true,lastT=performance.now(),liveTarget=0;
+const DUR=13000,HOLD=3500;let t0=performance.now(),heroVisible=true,lastT=performance.now(),liveTarget=0;
 new IntersectionObserver(e=>heroVisible=e[0].isIntersecting,{threshold:.05}).observe(hero);
 function frame(t){const dt=Math.min(60,t-lastT);lastT=t;
   if(mode==="replay"){if(!heroVisible)t0+=dt;const e=(t-t0)%(DUR+HOLD);P=RM?.9:Math.min(1,e/DUR)}
@@ -466,7 +513,7 @@ const wnote=$("#wnote"),fmtT=t=>new Date(t*1000).toLocaleTimeString([],{hour:"2-
 function setNote(cls,html){wnote.className="wnote "+cls;wnote.innerHTML=html}
 async function checkWord(afterKill){
   try{const r=await fetch(API+"/api/words/"+encodeURIComponent(wid),{cache:"no-store"});const j=await r.json();
-    if(j.pid)$("#kpid").textContent="keeper · pid "+j.pid;
+    if(j.pid)$("#kpid").textContent="pid "+j.pid;
     if(r.ok){
       if(afterKill){setNote("back",`It came back: <q>${esc(j.text)}</q><br>same process, pid ${j.pid}, after every process on the machine died.`);
         $("#memo").classList.remove("glow");void $("#memo").offsetWidth;$("#memo").classList.add("glow");
@@ -475,12 +522,12 @@ async function checkWord(afterKill){
     else if(r.status===404)setNote(afterKill?"gone":"",afterKill?"Your word didn't come back. Tell us, that's a bug.":"It goes into one process's RAM. That program never writes it to a file.")
   }catch(e){}}
 if(wid)setTimeout(()=>checkWord(false),800);
-fetch(API+"/api/words",{cache:"no-store"}).then(r=>r.json()).then(j=>{if(j.pid)$("#kpid").textContent="keeper · pid "+j.pid}).catch(()=>{});
+fetch(API+"/api/words",{cache:"no-store"}).then(r=>r.json()).then(j=>{if(j.pid)$("#kpid").textContent="pid "+j.pid}).catch(()=>{});
 $("#wform").onsubmit=async e=>{e.preventDefault();const text=$("#win").value.trim();if(!text)return;$("#wbtn").disabled=true;
   try{const r=await fetch(API+"/api/words",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({text})});const j=await r.json();
     if(!r.ok){setNote("gone",esc(j.error||"couldn't keep it"));return}
     wid=j.id;try{localStorage.setItem("cryo_word",wid)}catch(e){}
-    $("#kpid").textContent="keeper · pid "+j.pid;$("#win").value="";
+    $("#kpid").textContent="pid "+j.pid;$("#win").value="";
     setNote("ok",`Kept in memory by pid ${j.pid}: <q>${esc(j.text)}</q><br>Nothing saved it to a file. Now kill the machine ↓`)}
   catch(e){setNote("gone","couldn't reach the Sprite")}finally{$("#wbtn").disabled=false}};
 
@@ -491,6 +538,30 @@ document.addEventListener("visibilitychange",()=>{
   document.title=T0;const gone=(Date.now()-hiddenAt)/1000;if(!hiddenAt||gone<4||RM)return;
   const a=$("#away"),m=$("#awaymsg");$("#awayT").textContent=dur(gone);a.classList.remove("melt");a.classList.add("show");m.classList.add("show");
   setTimeout(()=>{a.classList.add("melt");m.classList.remove("show")},1500);setTimeout(()=>a.classList.remove("show","melt"),3600)});
+
+/* ---------- how it works: one loop, four steps ---------- */
+(function(){const rig=$("#rig");if(!rig)return;const L=$("#chipLive"),C=$("#chipCopy"),A=$("#boxA"),B=$("#boxB"),steps=$$(".step");
+  let vis=false,t0=performance.now(),jump=null;new IntersectionObserver(e=>vis=e[0].isIntersecting).observe(rig);
+  steps.forEach((st,k)=>st.onclick=()=>{jump=k});
+  const D=11000,AT=[0,.25,.42,.62,1];
+  const pos=(el,x,y)=>{el.style.left=x+"%";el.style.top=y+"px"};
+  const ease=t=>t<.5?2*t*t:1-Math.pow(-2*t+2,2)/2;
+  function draw(t){
+    const k=t<AT[1]?0:t<AT[2]?1:t<AT[3]?2:3;steps.forEach((s,i)=>s.classList.toggle("on",i===k));
+    const ax=24,bx=76,ram=132,disk=236;
+    A.classList.toggle("dead",k===1);B.classList.remove("dead");
+    $("#stA").textContent=k===1?"✕ every process died":k===3&&t>.8?"empty":"running";$("#stA").style.color=k===1?"#ff4d4d":"";
+    $("#stB").textContent=k===3&&t>.86?"● claude landed":"running";$("#stB").style.color=k===3&&t>.86?"#5cf0a8":"";
+    $("#arrow").classList.toggle("on",k===3&&t<.9);$("#clkB").classList.toggle("ok",k===3);
+    $("#clkB").textContent=k===3?"up 17 h · clock ahead ✓":"up 17 h";
+    if(k===0){const f=ease(Math.min(1,Math.max(0,(t-.06)/.14)));pos(L,ax,ram);L.className="chip";L.style.opacity=1;pos(C,ax,ram+(disk-ram)*f);C.style.opacity=f>0?1:0}
+    else if(k===1){pos(C,ax,disk);C.style.opacity=1;const f=(t-AT[1])/(AT[2]-AT[1]);L.className="chip red";L.style.opacity=f<.35?1-f/.35*.0:Math.max(0,1-(f-.35)*3);pos(L,ax,ram)}
+    else if(k===2){const f=ease(Math.min(1,(t-AT[2])/(AT[3]-AT[2])*1.4));L.style.opacity=0;C.style.opacity=1;pos(C,ax,disk+(ram-disk)*f);C.className=f>.95?"chip":"chip ice"}
+    else{const f=ease(Math.min(1,Math.max(0,(t-AT[3]-.04)/.22)));C.className="chip";C.style.opacity=1;pos(C,ax+(bx-ax)*f,ram-Math.sin(f*Math.PI)*70);L.style.opacity=0}
+    C.querySelector("i").textContent=k===0&&t<.2?"on disk":k===2&&t<AT[3]-.03?"thawing":k>=2?"190 MB":"on disk";
+  }
+  (function loop(now){if(jump!=null){t0=now-AT[jump]*D-1;jump=null}if(vis&&!RM){draw(((now-t0)%D)/D)}else if(RM)draw(.9);requestAnimationFrame(loop)})(performance.now());
+})();
 
 /* ---------- small things ---------- */
 const io=new IntersectionObserver(es=>es.forEach(e=>{if(!e.isIntersecting)return;e.target.classList.add("in");io.unobserve(e.target);
