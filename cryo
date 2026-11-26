@@ -19,18 +19,26 @@ STATE = os.environ.get("CRYO_HOME", "/var/lib/cryo")
 EVENTS = os.path.join(STATE, "events.jsonl")
 
 
+_BOOT = None
+
+
 def boot_id():
     """Identity of the current environment. A Sprite checkpoint restore restarts
     the container but not the VM kernel, so the kernel boot_id stays the same.
-    Combine it with the start time of PID 1 to catch both kinds of restart."""
-    with open("/proc/sys/kernel/random/boot_id") as f:
-        kernel = f.read().strip()
-    try:
-        with open("/proc/1/stat") as f:
-            init_start = f.read().split(") ", 1)[1].split()[19]
-    except (OSError, IndexError):
-        init_start = "?"
-    return f"{kernel}/{init_start}"
+    Combine it with the start time of PID 1 to catch both kinds of restart.
+    Cached: a running cryo never outlives a restart, and a flaky read must not
+    make live agents look dead."""
+    global _BOOT
+    if _BOOT is None:
+        with open("/proc/sys/kernel/random/boot_id") as f:
+            kernel = f.read().strip()
+        try:
+            with open("/proc/1/stat") as f:
+                init_start = f.read().split(") ", 1)[1].split()[19]
+        except (OSError, IndexError):
+            init_start = "?"
+        _BOOT = f"{kernel}/{init_start}"
+    return _BOOT
 
 
 def now():
@@ -87,9 +95,10 @@ def seccomp_blocker(blocked=tuple(BLOCKED_SYSCALLS.values()), errno_=38):
     return apply
 
 
-# statuses cryo must not thaw on its own: stopped by hand, or on its way to /
-# already living on another Sprite
-PARKED = ("stopped", "leaving", "away", "moved", "arriving")
+# statuses cryo must not thaw on its own: stopped by hand (stop, freeze --stop),
+# exited on its own, given up on after failed thaws, or on its way to / already
+# living on another Sprite
+PARKED = ("stopped", "frozen", "exited", "failed", "leaving", "away", "moved", "arriving")
 
 
 def agent_dir(name):
@@ -119,16 +128,59 @@ def all_agents():
         return []
     out = []
     for n in sorted(os.listdir(root)):
-        if os.path.exists(os.path.join(root, n, "meta.json")):
-            out.append(load(n))
+        try:
+            with open(os.path.join(root, n, "meta.json")) as f:
+                out.append(json.load(f))
+        except (OSError, ValueError):
+            continue   # gone or half-written: skip it this round
     return out
 
 
 def event(kind, name, **kw):
     os.makedirs(STATE, exist_ok=True)
     rec = {"t": now(), "kind": kind, "agent": name, "boot_id": boot_id(), **kw}
-    with open(EVENTS, "a") as f:
-        f.write(json.dumps(rec) + "\n")
+    try:
+        with open(EVENTS, "a") as f:
+            f.write(json.dumps(rec) + "\n")
+        if os.path.getsize(EVENTS) > 4 << 20:   # keep the log from growing forever
+            with open(EVENTS) as f:
+                keep = f.readlines()[-3000:]
+            with open(EVENTS + ".tmp", "w") as f:
+                f.writelines(keep)
+            os.replace(EVENTS + ".tmp", EVENTS)
+    except OSError:
+        pass   # a full disk must not take freezing and thawing down with it
+
+
+class agent_lock:
+    """One freeze, thaw or status change per agent at a time, across the watch
+    service, the api and the cli. Inside the lock, re-read meta.json: the dict a
+    caller loaded earlier may be stale (someone may have stopped the agent)."""
+    def __init__(self, name):
+        self.name = name
+
+    def __enter__(self):
+        import fcntl
+        d = agent_dir(self.name)
+        os.makedirs(d, exist_ok=True)
+        self.f = open(os.path.join(d, "lock"), "w")
+        fcntl.flock(self.f, fcntl.LOCK_EX)
+        return self
+
+    def __exit__(self, *exc):
+        self.f.close()
+
+
+def fresh(meta):
+    """Reload meta from disk into the caller's dict (callers keep using it)."""
+    try:
+        with open(os.path.join(agent_dir(meta["name"]), "meta.json")) as f:
+            disk = json.load(f)
+        meta.clear()
+        meta.update(disk)
+    except (OSError, ValueError):
+        pass
+    return meta
 
 
 def alive(pid):
@@ -148,6 +200,29 @@ def alive(pid):
         return False
 
 
+def agent_alive(m):
+    """The agent's process is running. A PID alone isn't enough: after a restart
+    a boot process can get the same PID, so it must also be from this boot."""
+    return alive(m.get("pid")) and m.get("boot_id") == boot_id()
+
+
+def images_dir(d):
+    """The current images, recovering from a restart in the middle of a swap
+    (images renamed to images.old, the new set not yet renamed in)."""
+    cur, old = os.path.join(d, "images"), os.path.join(d, "images.old")
+    if not os.path.isdir(cur) and os.path.isdir(old):
+        os.rename(old, cur)
+    return cur
+
+
+def in_seccomp():
+    try:
+        with open("/proc/self/status") as f:
+            return any(l.startswith("Seccomp:") and l.split()[1] != "0" for l in f)
+    except OSError:
+        return False
+
+
 def dir_size(path):
     total = 0
     for root, _, files in os.walk(path):
@@ -163,6 +238,9 @@ def dir_size(path):
 # --tcp-established and come back closed (--tcp-close); the client reconnects.
 # CRIU normally locks them with iptables while dumping, but there's no iptables
 # on a Sprite and we don't need the lock when the sockets are restored closed.
+CRIU_TIMEOUT = 600
+
+
 def to_root_cgroup():
     """Sprite services run in their own cgroups (/svc.<name>), and work started
     from there runs far slower than from a shell: a dump that takes 0.05 s from
@@ -178,7 +256,12 @@ def to_root_cgroup():
 def criu(args, log_dir):
     """Run criu, return (ok, seconds, error_lines)."""
     t0 = now()
-    r = subprocess.run(["criu"] + args, capture_output=True, text=True, preexec_fn=to_root_cgroup)
+    try:
+        r = subprocess.run(["criu"] + args, capture_output=True, text=True, preexec_fn=to_root_cgroup,
+                           timeout=CRIU_TIMEOUT)
+    except subprocess.TimeoutExpired:
+        # killing criu lets seized tasks run on; better than blocking every agent forever
+        return False, now() - t0, [f"criu gave up after {CRIU_TIMEOUT}s"]
     dt = now() - t0
     errs = []
     for line in (r.stderr or "").splitlines():
@@ -202,21 +285,28 @@ def high_pids():
     try:
         with open("/proc/sys/kernel/pid_max") as f:
             pid_max = int(f.read())
-        base = min(pid_max - 100000, 300000)
-        if base > 20000:
-            import random
+        import random
+        if pid_max > 200000:
+            base, spread = min(pid_max - 100000, 300000), 50000
+        else:
+            # Sprites use pid_max 32768: take the top quarter
+            base, spread = pid_max * 3 // 4, pid_max // 4 - 2000
+        if spread > 0:
             with open("/proc/sys/kernel/ns_last_pid", "w") as f:
-                f.write(str(base + random.randint(0, 50000)))
+                f.write(str(base + random.randint(0, spread)))
     except (OSError, ValueError):
         pass
 
 
 def cmd_run(a):
     name = a.name
-    if os.path.exists(os.path.join(agent_dir(name), "meta.json")) and alive(load(name).get("pid")):
+    if os.path.exists(os.path.join(agent_dir(name), "meta.json")) and agent_alive(load(name)):
         sys.exit(f"cryo: {name} is already running")
     d = agent_dir(name)
     os.makedirs(d, exist_ok=True)
+    # an older run's snapshot must not come back in place of this one
+    for old in ("images", "images.old", "images.new"):
+        shutil.rmtree(os.path.join(d, old), ignore_errors=True)
     env = dict(os.environ)
     env["UV_USE_IO_URING"] = "0"
     blocker = None if a.no_filter else seccomp_blocker()
@@ -286,7 +376,7 @@ def tree_cpu(pid):
         try:
             with open(f"/proc/{p}/stat") as f:
                 fields = f.read().split(") ", 1)[1].split()
-            total += int(fields[11]) + int(fields[12])
+            total += sum(int(x) for x in fields[11:15])   # utime stime cutime cstime
         except (OSError, IndexError, ValueError):
             pass
     return total
@@ -367,10 +457,25 @@ def irmap_paths(meta):
 
 
 def freeze(meta, leave_running, status=None):
+    if in_seccomp():
+        return False, (f"{meta['name']}: can't freeze from inside a cryo agent (the kernel won't let a "
+                       f"process under seccomp suspend another's); ask cryo serve or run it from a shell")
+    with agent_lock(meta["name"]):
+        fresh(meta)
+        if status is None and meta.get("status") in PARKED:
+            return False, f"{meta['name']}: {meta['status']}, left alone"
+        if status:
+            meta["status"] = status    # before the dump, so nobody thaws it mid-way
+            save(meta)
+        return _freeze(meta, leave_running, status)
+
+
+def _freeze(meta, leave_running, status):
     name = meta["name"]
     d = agent_dir(name)
-    if not alive(meta["pid"]):
+    if not agent_alive(meta):
         return False, f"{name}: not running"
+    images_dir(d)
     new = os.path.join(d, "images.new")
     shutil.rmtree(new, ignore_errors=True)
     os.makedirs(new)
@@ -400,12 +505,13 @@ def freeze(meta, leave_running, status=None):
     old = os.path.join(d, "images.old")
     shutil.rmtree(old, ignore_errors=True)
     if os.path.exists(cur):
-        os.rename(cur, old)
+        os.rename(cur, old)        # a restart right here is undone by images_dir()
     os.rename(new, cur)
     shutil.rmtree(old, ignore_errors=True)
     paused = paused_seconds(cur)
     meta.update(last_freeze=now(), freeze_seconds=round(dt, 3), paused_seconds=paused,
                 cpu_at_freeze=tree_cpu(meta["pid"]), image_bytes=dir_size(cur), boot_id=boot_id(),
+                mono_at_freeze=time.monotonic(),
                 status=status or ("running" if leave_running else "frozen"))
     save(meta)
     event("freeze", name, seconds=round(dt, 3), paused=paused, bytes=meta["image_bytes"],
@@ -432,10 +538,18 @@ def paused_seconds(images):
 
 
 def thaw(meta, extra=()):
+    with agent_lock(meta["name"]):
+        fresh(meta)
+        return _thaw(meta, extra)
+
+
+def _thaw(meta, extra=()):
     name = meta["name"]
     d = agent_dir(name)
-    img = os.path.join(d, "images")
-    if alive(meta["pid"]):
+    img = images_dir(d)
+    if meta.get("came_from") and MOVED_ARGS[0] not in extra:
+        extra = tuple(extra) + MOVED_ARGS   # its images may still name the other Sprite's cgroups
+    if agent_alive(meta):
         return False, f"{name}: already running (pid {meta['pid']})"
     if not os.path.isdir(img):
         return False, f"{name}: nothing frozen to thaw"
@@ -459,12 +573,17 @@ def thaw(meta, extra=()):
         with open(pidfile) as f:
             pid = int(f.read().strip())
     lost = now() - (meta.get("last_freeze") or now())
+    # finding 7: after a kernel reboot this clock restarts near zero; every timer
+    # in the agent then waits until it catches up. Say so instead of staying silent.
+    behind = (meta.get("mono_at_freeze") or 0) - time.monotonic()
     # restored tasks start with fresh CPU counters; re-baseline the activity check
     meta.update(pid=pid, status="running", boot_id=boot_id(), thaws=meta.get("thaws", 0) + 1,
-                cpu_at_freeze=tree_cpu(pid))
+                cpu_at_freeze=tree_cpu(pid), thaw_failures=0)
     save(meta)
-    event("thaw", name, seconds=round(dt, 3), pid=pid, since_freeze=round(lost, 1))
-    return True, f"{name}: thawed in {dt:.2f}s as pid {pid} (state from {lost:.0f}s before)"
+    event("thaw", name, seconds=round(dt, 3), pid=pid, since_freeze=round(lost, 1),
+          **({"clock_behind": round(behind)} if behind > 60 else {}))
+    note = f"; its clock went back {behind / 3600:.1f}h, so its timers wait that long" if behind > 60 else ""
+    return True, f"{name}: thawed in {dt:.2f}s as pid {pid} (state from {lost:.0f}s before){note}"
 
 
 def cmd_freeze(a):
@@ -488,7 +607,7 @@ def cmd_thaw(a):
             continue
         recalled = m["status"] in ("away", "leaving")
         arriving = bool(m.get("landing"))
-        ok, msg = thaw(m, extra=MOVED_ARGS if m.get("came_from") else ())
+        ok, msg = thaw(m)
         if ok and arriving:
             landed(load(m["name"]), msg)
             continue
@@ -498,6 +617,10 @@ def cmd_thaw(a):
             for k in [k for k, t in tickets.items() if t["name"] == m["name"]]:
                 if tickets[k].get("fetched"):
                     print(f"cryo: careful: {m['name']} was already pulled by another Sprite")
+                try:
+                    os.remove(tickets[k]["bundle"])   # it holds the whole process memory
+                except OSError:
+                    pass
                 del tickets[k]
             save_tickets(tickets)
         print("cryo:", msg)
@@ -505,22 +628,60 @@ def cmd_thaw(a):
     sys.exit(rc)
 
 
-def cmd_boot(a):
+def cmd_boot(a, retry=None):
     """Thaw every agent whose process died because the machine restarted."""
-    bid = boot_id()
     back, lost = [], []
     for m in all_agents():
-        if alive(m["pid"]) or m["status"] in PARKED:
-            continue
-        restarted = m.get("boot_id") != bid
-        if restarted:
-            event("reboot_detected", m["name"], old_boot_id=m.get("boot_id"))
-        ok, msg = thaw(m)
-        print("cryo:", msg, flush=True)
-        if restarted:
+        ok, msg = revive(m, retry)
+        if msg:
+            print("cryo:", msg, flush=True)
+        if ok is not None and m.get("_restarted"):
             (back if ok else lost).append(msg)
     if back or lost:
         restart_alert(back, lost)
+
+
+def revive(m, retry=None):
+    """Decide what to do with an agent that isn't running.
+    Returns (None, "") when there's nothing to do, else (thawed?, message).
+
+    Only a restart brings an agent back. One that exits or is killed while the
+    Sprite stays up is marked exited and left alone: thawing it would replay
+    whatever it did after its last snapshot, and a crash would loop forever.
+    Failed thaws back off and, after a few tries, give up with an alert."""
+    if m["status"] in PARKED or agent_alive(m):
+        return None, ""
+    name = m["name"]
+    if m.get("boot_id") == boot_id():
+        with agent_lock(name):
+            fresh(m)
+            if m["status"] in PARKED or agent_alive(m):
+                return None, ""
+            m["status"] = "exited"
+            save(m)
+        event("exited", name)
+        return None, f"{name}: exited on its own; left alone (cryo thaw {name} brings it back)"
+    if retry is not None and time.monotonic() < retry.get(name, (0, 0))[1]:
+        return None, ""
+    m["_restarted"] = True
+    event("reboot_detected", name, old_boot_id=m.get("boot_id"))
+    ok, msg = thaw(m)
+    if not ok:
+        n = (retry or {}).get(name, (0, 0))[0] + 1
+        if retry is not None:
+            retry[name] = (n, time.monotonic() + min(60, 2 ** n))
+        if retry is None or n >= 5:
+            with agent_lock(name):
+                fresh(m)
+                m["status"] = "failed"
+                save(m)
+            event("gave_up", name, tries=n)
+            m["_restarted"] = True
+            return False, msg + f"\n  (gave up after {n} tries; cryo thaw {name} to try again)"
+        return None, ""
+    if retry is not None:
+        retry.pop(name, None)
+    return True, msg
 
 
 def restart_alert(back, lost):
@@ -553,7 +714,8 @@ def cmd_watch(a):
     `interval` seconds of awake time while the agent stays busy."""
     print(f"cryo: watching (freeze {a.settle}s after activity, at most every {a.interval}s while busy)",
           flush=True)
-    cmd_boot(a)
+    retry = {}         # name -> (failed thaws, monotonic time of next try)
+    cmd_boot(a, retry)
     stop = False
 
     def bye(*_):
@@ -567,54 +729,67 @@ def cmd_watch(a):
     while not stop:
         t = time.monotonic()
         for m in all_agents():
-            if m["status"] in PARKED:
-                continue
-            name = m["name"]
-            if not alive(m["pid"]):
-                ok, msg = thaw(m)
-                print("cryo:", msg, flush=True)
-                seen.pop(name, None)
-                burst.pop(name, None)
-                continue
-            cpu = tree_cpu(m["pid"])
-            prev = seen.get(name)
-            last_burst = prev[1] if prev else t
-            if prev is not None:
-                step = cpu - prev[0]
-                # an idle agent still ticks (timers, a blinking cursor, a spinner).
-                # only checks where it used a real slice of CPU count as work, so
-                # background ticking never adds up to a snapshot on its own
-                if step >= a.burst:
-                    burst[name] = burst.get(name, 0) + step
-                    last_burst = t
-            seen[name] = (cpu, last_burst)
-            quiet = t - last_burst >= a.settle
-            base = m.get("cpu_at_freeze")
-            worked = base is None or burst.get(name, 0) >= a.work_ticks
-            since = t - froze_at.get(name, -1e9)
-            drifted = base is not None and cpu - base > 3 and since >= a.drift
-            has_image = os.path.isdir(os.path.join(agent_dir(name), "images"))
-            if not has_image or (worked and (quiet or since >= a.interval)) or drifted:
-                ok, msg = freeze(m, leave_running=True)
-                froze_at[name] = time.monotonic()
-                burst[name] = 0
-                # criu runs code inside the process while dumping it; that CPU is
-                # ours, not the agent's, so don't let the next check count it as work
-                seen[name] = (tree_cpu(m["pid"]), seen[name][1])
-                if not ok:
-                    print("cryo:", msg, flush=True)
+            try:
+                watch_one(m, a, t, seen, burst, froze_at, retry)
+            except Exception as e:   # one agent's trouble must not stop the others
+                print(f"cryo: {m.get('name')}: {type(e).__name__}: {e}", flush=True)
+                event("watch_error", m.get("name"), error=f"{type(e).__name__}: {e}"[:300])
         for _ in range(20):
             if stop:
                 break
             time.sleep(0.1)
 
 
+def watch_one(m, a, t, seen, burst, froze_at, retry):
+    if m["status"] in PARKED:
+        return
+    name = m["name"]
+    if not agent_alive(m):
+        ok, msg = revive(m, retry)
+        if msg:
+            print("cryo:", msg, flush=True)
+        if ok is False:
+            restart_alert([], [msg])
+        seen.pop(name, None)
+        burst.pop(name, None)
+        return
+    cpu = tree_cpu(m["pid"])
+    prev = seen.get(name)
+    last_burst = prev[1] if prev else t
+    if prev is not None:
+        step = cpu - prev[0]
+        # an idle agent still ticks (timers, a blinking cursor, a spinner).
+        # only checks where it used a real slice of CPU count as work, so
+        # background ticking never adds up to a snapshot on its own
+        if step >= a.burst:
+            burst[name] = burst.get(name, 0) + step
+            last_burst = t
+    seen[name] = (cpu, last_burst)
+    quiet = t - last_burst >= a.settle
+    base = m.get("cpu_at_freeze")
+    worked = base is None or burst.get(name, 0) >= a.work_ticks
+    since = t - froze_at.get(name, -1e9)
+    drifted = base is not None and cpu - base > 3 and since >= a.drift
+    has_image = os.path.isdir(os.path.join(agent_dir(name), "images"))
+    if not has_image or (worked and (quiet or since >= a.interval)) or drifted:
+        ok, msg = freeze(m, leave_running=True)
+        froze_at[name] = time.monotonic()
+        burst[name] = 0
+        # criu runs code inside the process while dumping it; that CPU is
+        # ours, not the agent's, so don't let the next check count it as work
+        seen[name] = (tree_cpu(m["pid"]), seen[name][1])
+        if not ok:
+            print("cryo:", msg, flush=True)
+
+
 def cmd_stop(a):
     m = load(a.name)
-    if alive(m["pid"]):
-        os.killpg(os.getpgid(m["pid"]), signal.SIGTERM)
-    m["status"] = "stopped"
-    save(m)
+    with agent_lock(a.name):
+        fresh(m)
+        m["status"] = "stopped"    # first, so nothing thaws it once it's dead
+        save(m)
+        if agent_alive(m):
+            os.killpg(os.getpgid(m["pid"]), signal.SIGTERM)
     event("stop", a.name)
     print(f"cryo: {a.name} stopped (frozen copy kept)")
 
@@ -709,7 +884,7 @@ def cmd_teleport(a):
     import secrets
     import tarfile
     m = load(a.name)
-    if not alive(m["pid"]):
+    if not agent_alive(m):
         sys.exit(f"cryo: {a.name} isn't running")
     url = (a.url or load_config().get("url") or "").rstrip("/")
     if not url:
@@ -803,7 +978,7 @@ def cmd_import(a):
         man = json.load(tar.extractfile("manifest.json"))
         name, meta = man["name"], man["meta"]
         problems = []
-        if os.path.exists(os.path.join(agent_dir(name), "meta.json")) and alive(load(name).get("pid")):
+        if os.path.exists(os.path.join(agent_dir(name), "meta.json")) and agent_alive(load(name)):
             problems.append(f"an agent called {name} is already running here")
         # programs time their timers with CLOCK_MONOTONIC, which counts from each Sprite's
         # boot. Sprites can't give a process its own clock (no CAP_SYS_TIME, so no time
@@ -860,7 +1035,8 @@ def cmd_import(a):
     # the cgroups it lived in belong to the other Sprite; let it join ours
     ok, msg = thaw(meta, extra=MOVED_ARGS)
     if not ok:
-        meta["status"] = "frozen"
+        meta = fresh(meta)
+        meta["status"] = "arriving"   # parked: only `cryo thaw` lands it, and that tells the source
         save(meta)
         print("cryo:", msg)
         print(f"cryo: the images are here now; fix the problem and `sudo cryo thaw {name}` to land it,")
@@ -911,16 +1087,20 @@ GATEWAY = "https://api.sprites.dev/v1/gateway"
 
 
 def load_config():
-    if os.path.exists(CONFIG):
+    try:
         with open(CONFIG) as f:
             return json.load(f)
-    return {}
+    except (OSError, ValueError):
+        return {}
 
 
 def save_config(c):
     os.makedirs(STATE, exist_ok=True)
-    with open(CONFIG, "w") as f:
+    with open(CONFIG + ".tmp", "w") as f:
         json.dump(c, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(CONFIG + ".tmp", CONFIG)
 
 
 def http_json(method, url, body=None, timeout=15):
@@ -989,7 +1169,7 @@ def cmd_say(a):
     m = load(a.name)
     if not m.get("tmux"):
         sys.exit(f"cryo: {a.name} isn't running in tmux")
-    if not alive(m["pid"]):
+    if not agent_alive(m):
         sys.exit(f"cryo: {a.name} isn't running ({m['status']}); `sudo cryo thaw {a.name}` first")
     sock = f"cryo-{a.name}"
     subprocess.run(["tmux", "-L", sock, "send-keys", "-t", a.name, "-l", a.text], check=True)
@@ -1048,7 +1228,7 @@ def public_agent(m):
     return {
         "name": m["name"],
         "program": os.path.basename(m["command"][0]) if m.get("command") else "?",
-        "pid": m["pid"], "alive": alive(m["pid"]), "status": m["status"],
+        "pid": m["pid"], "alive": agent_alive(m), "status": m["status"],
         "started": m.get("started"), "last_freeze": m.get("last_freeze"),
         "freeze_seconds": m.get("freeze_seconds"), "image_bytes": m.get("image_bytes"),
         "paused_seconds": m.get("paused_seconds"),
@@ -1086,7 +1266,7 @@ def cmd_serve(a):
         # the cryo service comes back up and thaws the agents.
         name = a.sprite or os.environ.get("SPRITE_NAME") or os.uname().nodename
         for m in all_agents():
-            if alive(m["pid"]) and m["status"] != "stopped":
+            if agent_alive(m) and m["status"] != "stopped":
                 freeze(m, leave_running=True)
         event("restart_requested", "*", sprite=name)
         r = subprocess.run(["sprite", "checkpoint", "create", "-s", name, "--comment", "cryo restart"],
@@ -1320,7 +1500,7 @@ def cmd_doctor(a):
         for pid in r.stdout.split()[:1]:
             rows.append((name, int(pid)))
     for m in all_agents():
-        if alive(m["pid"]):
+        if agent_alive(m):
             rows.append((f"agent {m['name']}", m["pid"]))
     for name, pid in rows:
         path, lim = cg(pid)
@@ -1330,7 +1510,7 @@ def cmd_doctor(a):
         if name.startswith("cryo"):
             p = env_path(pid)
             print(f"{'':18} PATH {p}   crit: {'yes' if any(os.path.exists(os.path.join(d, 'crit')) for d in p.split(':')) else 'NOT FOUND'}")
-    live = [m for m in all_agents() if alive(m["pid"])]
+    live = [m for m in all_agents() if agent_alive(m)]
     if live:
         m = min(live, key=lambda m: m.get("image_bytes") or 1 << 40)
         ok, msg = freeze(m, leave_running=True)
@@ -1347,7 +1527,7 @@ def cmd_ls(a):
     agents = all_agents()
     if a.json:
         for m in agents:
-            m["alive"] = alive(m["pid"])
+            m["alive"] = agent_alive(m)
         print(json.dumps(agents, indent=2))
         return
     if not agents:
@@ -1355,8 +1535,8 @@ def cmd_ls(a):
         return
     print(f"{'NAME':<14}{'PID':>8}  {'STATE':<9}{'LAST FREEZE':>12}{'IMAGE':>10}{'THAWS':>7}")
     for m in agents:
-        st = "running" if alive(m["pid"]) else m["status"]
-        if st == "running" and not alive(m["pid"]):
+        st = "running" if agent_alive(m) else m["status"]
+        if st == "running" and not agent_alive(m):
             st = "dead"
         lf = f"{now() - m['last_freeze']:.0f}s ago" if m.get("last_freeze") else "never"
         size = f"{m['image_bytes'] / 1e6:.1f}MB" if m.get("image_bytes") else "-"

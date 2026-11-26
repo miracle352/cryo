@@ -137,7 +137,10 @@ sudo cryo run keeper -- python3 ~/cryo/demo/keeper.py
    `criu dump --leave-running` into a fresh image directory and swaps it in
    atomically. Idle agents aren't re-dumped.
 3. **Thaw.** On boot the service compares the stored environment id with the
-   current one, and anything dead is restored with `criu restore`. Open TCP
+   current one, and anything dead is restored with `criu restore`. Only a
+   restart brings an agent back: one that exits or is killed while the Sprite
+   is up is marked `exited` and left alone (`cryo thaw` brings it back by hand),
+   and a thaw that keeps failing backs off and gives up with an email. Open TCP
    connections come back closed; clients reconnect.
 
 The images live on the Sprite's disk, so a Sprite checkpoint carries them too.
