@@ -1,19 +1,19 @@
-# cryo
+# Cryo
 
-**Your agent died at 3am. It didn't notice.**
+**Kill the machine. Keep the mind.**
 
 Put Claude Code on a Fly.io Sprite, give it a night's work, and walk away.
 Sprites keep their disk forever but not their processes: a cold wake, a host
 move or a checkpoint restore kills everything that was running, and the agent
 forgets the whole session. Fly's own docs say to assume processes are lost.
 
-cryo keeps the agent alive anyway. It freezes the running process to disk with
+Cryo keeps the agent alive anyway. It freezes the running process to disk with
 [CRIU](https://criu.org) whenever the agent has done some work, and thaws it
 when the Sprite comes back: same memory, same terminal, same conversation, mid
 sentence. It emails you through the Sprites Resend connector when that
 happens, and the agent mails you its report the same way when it's done.
-Our own overnight agent audited cryo this way, survived a restart mid-audit,
-and [found bugs we then fixed](demo/AUDIT.md).
+Our own overnight agent audited cryo this way: it survived a restart mid-audit
+and [reported 14 issues, 13 of them now fixed](demo/AUDIT.md).
 
 It can also **move a live agent to another Sprite**: Claude Code, frozen on one
 machine, woke up on another and answered *"The codeword is TELEPORT-9. hostname
@@ -29,12 +29,12 @@ Sprites](#what-we-found-out-about-sprites) the docs don't mention.
 
 ```
 $ sudo cryo run cc --tmux -- claude
-cryo: cc running as pid 315296
+cryo: cc running as pid 15296
 $ cryo say cc 'Remember this codeword: PINEAPPLE-42'
 ● OK
                     ...the Sprite is restored from a checkpoint;
                        every process on it dies...
-cryo: cc: thawed in 0.17s as pid 315296            (the cryo service, on boot)
+cryo: cc: thawed in 0.17s as pid 15296             (the cryo service, on boot)
 $ cryo say cc 'What was the codeword I gave you?'
 ● PINEAPPLE-42
 ```
