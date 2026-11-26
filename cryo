@@ -577,6 +577,8 @@ def cmd_stop(a):
 SYSTEM_DIRS = ("/usr/", "/lib/", "/lib32/", "/lib64/", "/bin/", "/sbin/", "/etc/",
                "/proc/", "/sys/", "/dev/", "/run/", "/snap/", "/opt/")
 TICKETS = os.path.join(STATE, "tickets.json")
+# kernel pseudo-files (/proc/<pid>/..., /dev/pts/...): criu recreates them, nothing to carry or check
+VIRTUAL = ("/proc/", "/sys/", "/dev/", "/run/")
 # the cgroups a teleported agent lived in belong to the other Sprite; let it join ours
 MOVED_ARGS = ("--manage-cgroups=ignore",)
 
@@ -609,7 +611,7 @@ def files_in_use(pid):
             pass
     files = []
     for path in sorted(paths):
-        if path.endswith(" (deleted)") or not os.path.isfile(path):
+        if path.endswith(" (deleted)") or path.startswith(VIRTUAL) or not os.path.isfile(path):
             continue
         files.append({"path": path, "size": os.path.getsize(path)})
     return files, sorted(d for d in dirs if not d.endswith(" (deleted)")), pids
@@ -740,7 +742,7 @@ def cmd_import(a):
         if taken:
             problems.append(f"pids {taken[:5]} are already used here")
         for f in man["files"]:
-            if f["carried"]:
+            if f["carried"] or f["path"].startswith(VIRTUAL):
                 continue
             if not os.path.isfile(f["path"]):
                 problems.append(f"missing here: {f['path']}")
