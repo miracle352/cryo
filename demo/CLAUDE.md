@@ -18,3 +18,14 @@ it on the way out. Use:
 To see which connectors this Sprite can use:
 
     curl -s https://api.sprites.dev/v1/gateway/list
+
+## Experiments
+
+Other agents on this machine are live, and people may be watching them. If you
+want to try cryo on a throwaway process, give it its own state folder so it
+can't see or touch the real agents:
+
+    export CRYO_HOME=<a folder in your scratchpad>
+
+Never run `cryo stop`, `thaw`, `freeze` or `teleport` on an agent you didn't
+start yourself, and stop your own test agents when you're done.
