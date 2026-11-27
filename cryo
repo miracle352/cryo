@@ -152,19 +152,28 @@ def event(kind, name, **kw):
         pass   # a full disk must not take freezing and thawing down with it
 
 
+class Busy(Exception):
+    """Someone else holds the agent's lock and we were told not to wait."""
+
+
 class agent_lock:
     """One freeze, thaw or status change per agent at a time, across the watch
     service, the api and the cli. Inside the lock, re-read meta.json: the dict a
     caller loaded earlier may be stale (someone may have stopped the agent)."""
-    def __init__(self, name):
+    def __init__(self, name, wait=True):
         self.name = name
+        self.wait = wait
 
     def __enter__(self):
         import fcntl
         d = agent_dir(self.name)
         os.makedirs(d, exist_ok=True)
         self.f = open(os.path.join(d, "lock"), "w")
-        fcntl.flock(self.f, fcntl.LOCK_EX)
+        try:
+            fcntl.flock(self.f, fcntl.LOCK_EX | (0 if self.wait else fcntl.LOCK_NB))
+        except BlockingIOError:
+            self.f.close()
+            raise Busy(self.name)
         return self
 
     def __exit__(self, *exc):
@@ -270,15 +279,16 @@ def to_root_cgroup():
         pass
 
 
-def criu(args, log_dir):
+def criu(args, log_dir, timeout=None):
     """Run criu, return (ok, seconds, error_lines)."""
+    timeout = timeout or CRIU_TIMEOUT
     t0 = now()
     try:
         r = subprocess.run(["criu"] + args, capture_output=True, text=True, preexec_fn=to_root_cgroup,
-                           timeout=CRIU_TIMEOUT)
+                           timeout=timeout)
     except subprocess.TimeoutExpired:
         # killing criu lets seized tasks run on; better than blocking every agent forever
-        return False, now() - t0, [f"criu gave up after {CRIU_TIMEOUT}s"]
+        return False, now() - t0, [f"criu gave up after {timeout}s"]
     dt = now() - t0
     errs = []
     for line in (r.stderr or "").splitlines():
@@ -473,21 +483,28 @@ def irmap_paths(meta):
     return sorted(hits)
 
 
-def freeze(meta, leave_running, status=None):
+def freeze(meta, leave_running, status=None, timeout=None, wait=True):
+    try:
+        return _freeze_locked(meta, leave_running, status, timeout, wait)
+    except Busy:
+        return False, f"{meta['name']}: a snapshot is already running, kept the last one"
+
+
+def _freeze_locked(meta, leave_running, status, timeout, wait):
     if in_seccomp():
         return False, (f"{meta['name']}: can't freeze from inside a cryo agent (the kernel won't let a "
                        f"process under seccomp suspend another's); ask cryo serve or run it from a shell")
-    with agent_lock(meta["name"]):
+    with agent_lock(meta["name"], wait=wait):
         fresh(meta)
         if status is None and meta.get("status") in PARKED:
             return False, f"{meta['name']}: {meta['status']}, left alone"
         if status:
             meta["status"] = status    # before the dump, so nobody thaws it mid-way
             save(meta)
-        return _freeze(meta, leave_running, status)
+        return _freeze(meta, leave_running, status, timeout)
 
 
-def _freeze(meta, leave_running, status):
+def _freeze(meta, leave_running, status, timeout=None):
     name = meta["name"]
     d = agent_dir(name)
     if not agent_alive(meta):
@@ -510,7 +527,7 @@ def _freeze(meta, leave_running, status):
             args += ["--irmap-scan-path", path]
     if leave_running:
         args.append("--leave-running")
-    ok, dt, errs = criu(args, new)
+    ok, dt, errs = criu(args, new, timeout)
     if not ok:
         event("freeze_failed", name, errors=errs)
         return False, f"{name}: freeze failed\n  " + "\n  ".join(errs[-6:])
@@ -1283,9 +1300,17 @@ def cmd_serve(a):
         # Restoring restarts every process on the Sprite, including this server;
         # the cryo service comes back up and thaws the agents.
         name = a.sprite or os.environ.get("SPRITE_NAME") or os.uname().nodename
-        for m in all_agents():
-            if agent_alive(m) and m["status"] != "stopped":
-                freeze(m, leave_running=True)
+        # every agent already has a recent snapshot from the watcher; this only
+        # folds in the last few seconds (a word just left with keeper). Smallest
+        # first, never wait on a snapshot already running, and give up after a
+        # minute in total: a visitor pressing kill shouldn't wait on a slow disk.
+        t0 = time.monotonic()
+        live = [m for m in all_agents() if agent_alive(m) and m["status"] != "stopped"]
+        for m in sorted(live, key=lambda m: m.get("image_bytes") or 1 << 40):
+            left = 60 - (time.monotonic() - t0)
+            if left < 5:
+                break
+            freeze(m, leave_running=True, timeout=min(30, left), wait=False)
         event("restart_requested", "*", sprite=name)
         r = subprocess.run(["sprite", "checkpoint", "create", "-s", name, "--comment", "cryo restart"],
                            capture_output=True, text=True)
