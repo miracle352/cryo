@@ -173,7 +173,14 @@ section{position:relative;padding:120px 0}
 .step p{color:var(--mu);font-size:14.5px;line-height:1.5}
 .step.on{border-color:rgba(143,216,255,.45);background:rgba(143,216,255,.06);transform:translateY(-3px)}
 .step.on b{color:var(--ice)}
-@media (max-width:700px),(max-width:980px) and (orientation:portrait){.steps{grid-template-columns:1fr 1fr}.rig{height:300px}.chip{width:132px;font-size:12px;padding:0 10px}.chip i{display:none}}
+@media (max-width:700px),(max-width:980px) and (orientation:portrait){.steps{grid-template-columns:1fr 1fr}
+.rig{height:330px}.box{width:44%}.box.a{left:4%}.box.b{right:4%}
+.box .hd{flex-direction:column;gap:3px;padding:10px 12px;font-size:11px}
+.box .hd span{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.slot{left:10px;right:10px;height:62px;font-size:9.5px;padding:6px 9px}.slot.ram{top:66px}.slot.disk{top:168px}
+.chip{width:118px;height:40px;font-size:12px;padding:0 10px}.chip i{display:none}
+.clockA,.clockB{font-size:10.5px;bottom:12px}.clockA{left:4%;margin-left:10px}.clockB{right:4%;margin-right:10px}
+.arrow{left:47%;width:6%}}
 #log{background:linear-gradient(#080a0c,#070b0e)}
 .dives{margin-top:56px;display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
 @media(max-width:900px){.dives{grid-template-columns:1fr}}
@@ -548,12 +555,13 @@ document.addEventListener("visibilitychange",()=>{
   const ease=t=>t<.5?2*t*t:1-Math.pow(-2*t+2,2)/2;
   function draw(t){
     const k=t<AT[1]?0:t<AT[2]?1:t<AT[3]?2:3;steps.forEach((s,i)=>s.classList.toggle("on",i===k));
-    const ax=24,bx=76,ram=132,disk=236;
+    const ph=innerWidth<=700||(innerWidth<=980&&innerHeight>innerWidth);
+    const ax=ph?26:24,bx=ph?74:76,ram=132,disk=ph?234:236;
     A.classList.toggle("dead",k===1);B.classList.remove("dead");
-    $("#stA").textContent=k===1?"✕ every process died":k===3&&t>.8?"empty":"running";$("#stA").style.color=k===1?"#ff4d4d":"";
-    $("#stB").textContent=k===3&&t>.86?"● claude landed":"running";$("#stB").style.color=k===3&&t>.86?"#5cf0a8":"";
+    $("#stA").textContent=k===1?(ph?"✕ all died":"✕ every process died"):k===3&&t>.8?"empty":"running";$("#stA").style.color=k===1?"#ff4d4d":"";
+    $("#stB").textContent=k===3&&t>.86?(ph?"● landed":"● claude landed"):"running";$("#stB").style.color=k===3&&t>.86?"#5cf0a8":"";
     $("#arrow").classList.toggle("on",k===3&&t<.9);$("#clkB").classList.toggle("ok",k===3);
-    $("#clkB").textContent=k===3?"up 17 h · clock ahead ✓":"up 17 h";
+    $("#clkB").textContent=k===3?(ph?"up 17 h · ahead ✓":"up 17 h · clock ahead ✓"):"up 17 h";
     if(k===0){const f=ease(Math.min(1,Math.max(0,(t-.06)/.14)));pos(L,ax,ram);L.className="chip";L.style.opacity=1;pos(C,ax,ram+(disk-ram)*f);C.style.opacity=f>0?1:0}
     else if(k===1){pos(C,ax,disk);C.style.opacity=1;const f=(t-AT[1])/(AT[2]-AT[1]);L.className="chip red";L.style.opacity=f<.35?1-f/.35*.0:Math.max(0,1-(f-.35)*3);pos(L,ax,ram)}
     else if(k===2){const f=ease(Math.min(1,(t-AT[2])/(AT[3]-AT[2])*1.4));L.style.opacity=0;C.style.opacity=1;pos(C,ax,disk+(ram-disk)*f);C.className=f>.95?"chip":"chip ice"}
